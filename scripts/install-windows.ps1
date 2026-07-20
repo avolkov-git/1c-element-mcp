@@ -43,8 +43,8 @@ function Test-PythonCommand {
     )
 
     # Windows PowerShell 5.1 converts native stderr into an error record. Under
-    # ErrorActionPreference=Stop, a missing py.exe selector would terminate the
-    # installer before it could try the next supported Python version.
+    # ErrorActionPreference=Stop, an unavailable py.exe selection would
+    # terminate the installer instead of producing a failed probe.
     $PreviousErrorActionPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = "SilentlyContinue"
@@ -62,10 +62,16 @@ function Test-PythonCommand {
 function Get-PythonCommand {
     $Launcher = Get-Command "py.exe" -ErrorAction SilentlyContinue
     if ($null -ne $Launcher) {
-        foreach ($Selector in @("-3.12", "-3.11")) {
-            if (Test-PythonCommand -Executable $Launcher.Source -PrefixArguments @($Selector)) {
-                return @($Launcher.Source, $Selector)
-            }
+        # Let the launcher select the newest installed Python 3. The probe
+        # enforces the minimum project requirement without enumerating minor
+        # versions that would become stale over time.
+        if (Test-PythonCommand -Executable $Launcher.Source -PrefixArguments @("-3")) {
+            return @($Launcher.Source, "-3")
+        }
+
+        # Some launcher implementations do not support the -3 selector.
+        if (Test-PythonCommand -Executable $Launcher.Source) {
+            return @($Launcher.Source)
         }
     }
 
@@ -76,7 +82,7 @@ function Get-PythonCommand {
         }
     }
 
-    throw "Python 3.11 or 3.12 x64 was not found. Install Python and run this script again."
+    throw "Python 3.11 or newer x64 was not found. Install Python and run this script again."
 }
 
 function ConvertTo-PowerShellLiteral {
