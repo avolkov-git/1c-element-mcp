@@ -8,6 +8,7 @@ const actionLabel = action.querySelector(".button-label");
 const sourceToggle = document.querySelector("#source-toggle");
 const sourceSettings = document.querySelector("#source-settings");
 const sourceInput = document.querySelector("#source-path");
+const sourceFeedback = document.querySelector("#source-feedback");
 const sourceError = document.querySelector("#source-error");
 const sourceUseOrigin = document.querySelector("#source-use-origin");
 
@@ -47,6 +48,12 @@ function showSourceError(value) {
   sourceInput.setAttribute("aria-invalid", value ? "true" : "false");
 }
 
+function showSourceFeedback(value, state = "") {
+  sourceFeedback.textContent = value;
+  sourceFeedback.hidden = !value;
+  sourceFeedback.dataset.state = state;
+}
+
 function setSourceEditor(updateSource) {
   if (!sourceDirty) {
     sourceInput.value = updateSource.kind === "local" ? updateSource.label : "";
@@ -57,8 +64,9 @@ function setSourceEditor(updateSource) {
 function markSourceDirty() {
   sourceDirty = true;
   showSourceError("");
+  showSourceFeedback("Путь изменён. Сохраните его вместе с проверкой обновлений.", "pending");
   sourceUseOrigin.hidden = false;
-  actionLabel.textContent = "Проверить обновления";
+  actionLabel.textContent = "Сохранить и проверить";
   action.disabled = false;
   action.dataset.action = "check";
 }
@@ -108,6 +116,12 @@ function render(payload) {
     action.disabled = false;
     action.dataset.action = "check";
   }
+
+  if (sourceDirty && payload.updates.state !== "checking") {
+    actionLabel.textContent = "Сохранить и проверить";
+    action.disabled = false;
+    action.dataset.action = "check";
+  }
 }
 
 async function saveSourceIfNeeded() {
@@ -123,10 +137,48 @@ async function saveSourceIfNeeded() {
     });
     sourceDirty = false;
     render(payload);
+    showSourceFeedback("Локальный источник сохранён. Проверяем обновления…", "success");
   } catch (error) {
     showSourceError(error.message);
     sourceInput.focus();
     throw error;
+  }
+}
+
+async function switchToOrigin() {
+  const originalLabel = sourceUseOrigin.textContent;
+  sourceUseOrigin.disabled = true;
+  sourceInput.disabled = true;
+  sourceUseOrigin.textContent = "Переключаем…";
+  showSourceError("");
+  showSourceFeedback("Сохраняем удалённый origin…", "loading");
+
+  try {
+    const payload = await api("/api/updates/source", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: null }),
+    });
+    sourceDirty = false;
+    sourceInput.value = "";
+    render(payload);
+    showSourceFeedback("");
+    sourceSettings.hidden = true;
+    sourceToggle.setAttribute("aria-expanded", "false");
+    sourceToggle.textContent = "Изменить";
+    title.textContent = "Источник обновлений изменён";
+    message.textContent = "Следующая проверка будет выполнена через удалённый origin.";
+    actionLabel.textContent = "Проверить обновления";
+    action.disabled = false;
+    action.dataset.action = "check";
+    sourceToggle.focus();
+  } catch (error) {
+    showSourceFeedback("");
+    showSourceError(`Не удалось переключиться на origin: ${error.message}`);
+  } finally {
+    sourceInput.disabled = false;
+    sourceUseOrigin.disabled = false;
+    sourceUseOrigin.textContent = originalLabel;
   }
 }
 
@@ -139,6 +191,7 @@ async function checkUpdates(applyLocalUpdate = false) {
     await saveSourceIfNeeded();
     const payload = await api("/api/updates/check", { method: "POST" });
     render(payload);
+    showSourceFeedback("");
     if (
       applyLocalUpdate &&
       payload.updates.source.kind === "local" &&
@@ -148,6 +201,7 @@ async function checkUpdates(applyLocalUpdate = false) {
       await applyUpdate();
     }
   } catch (error) {
+    showSourceFeedback("");
     title.textContent = sourceError.hidden ? "Проверка недоступна" : "Проверьте каталог";
     message.textContent = error.message;
     action.disabled = false;
@@ -202,16 +256,15 @@ sourceToggle.addEventListener("click", () => {
   sourceSettings.hidden = !open;
   sourceToggle.setAttribute("aria-expanded", String(open));
   sourceToggle.textContent = open ? "Скрыть" : "Изменить";
-  if (open) sourceInput.focus();
+  if (open) {
+    if (!sourceDirty) showSourceFeedback("");
+    sourceInput.focus();
+  }
 });
 
 sourceInput.addEventListener("input", markSourceDirty);
 
-sourceUseOrigin.addEventListener("click", () => {
-  sourceInput.value = "";
-  markSourceDirty();
-  sourceInput.focus();
-});
+sourceUseOrigin.addEventListener("click", switchToOrigin);
 
 sourceSettings.addEventListener("submit", (event) => {
   event.preventDefault();

@@ -218,6 +218,7 @@ h1 {
 }
 
 .source-help,
+.source-feedback,
 .source-error {
   margin-top: 8px;
   font-size: 0.875rem;
@@ -226,6 +227,14 @@ h1 {
 
 .source-help {
   color: var(--muted);
+}
+
+.source-feedback {
+  color: var(--muted);
+}
+
+.source-feedback[data-state="success"] {
+  color: var(--success);
 }
 
 .source-help code {
@@ -243,6 +252,15 @@ h1 {
   border: 0;
   background: transparent;
   font-size: 0.875rem;
+}
+
+.secondary-action:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.secondary-action:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 .update-area {
