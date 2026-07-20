@@ -28,7 +28,7 @@ def test_stdio_server_exposes_read_only_tools(corpus_path: Path, element_project
         ):
             initialized = await session.initialize()
             assert initialized.serverInfo.name == "1C Element"
-            assert initialized.serverInfo.version == "0.8.0"
+            assert initialized.serverInfo.version == "0.9.0"
             assert initialized.instructions is not None
             assert "first call\nget_documentation_status" in initialized.instructions
             assert "Never call start_documentation_build without that consent" in initialized.instructions
@@ -41,6 +41,7 @@ def test_stdio_server_exposes_read_only_tools(corpus_path: Path, element_project
             assert "Never read paths outside the connected project" in initialized.instructions
             assert "first call get_console_status" in initialized.instructions
             assert "Never ask the user to paste Client-Secret" in initialized.instructions
+            assert "Use lookup_symbol for declarations" in initialized.instructions
             tools = await session.list_tools()
             names = {tool.name for tool in tools.tools}
             assert names == {
@@ -56,6 +57,9 @@ def test_stdio_server_exposes_read_only_tools(corpus_path: Path, element_project
                 "get_documentation_status",
                 "get_project_overview",
                 "get_project_status",
+                "get_related_docs",
+                "lookup_symbol",
+                "find_references",
                 "list_project_elements",
                 "list_console_spaces",
                 "list_space_projects",
@@ -74,6 +78,9 @@ def test_stdio_server_exposes_read_only_tools(corpus_path: Path, element_project
                 "get_documentation_status",
                 "get_project_overview",
                 "get_project_status",
+                "get_related_docs",
+                "lookup_symbol",
+                "find_references",
                 "list_project_elements",
                 "list_console_spaces",
                 "list_space_projects",
@@ -92,6 +99,8 @@ def test_stdio_server_exposes_read_only_tools(corpus_path: Path, element_project
             assert "YAML entities" in (descriptions["list_project_elements"] or "")
             assert "relative path" in (descriptions["read_project_file"] or "")
             assert "current IDE project" in (descriptions["list_space_projects"] or "")
+            assert "lexical ambiguity" in (descriptions["lookup_symbol"] or "")
+            assert "compiler-level" in (descriptions["find_references"] or "")
 
             result = await session.call_tool("search_docs", {"query": "ВебМетод", "corpus": "lang"})
             assert result.isError is False
@@ -102,6 +111,16 @@ def test_stdio_server_exposes_read_only_tools(corpus_path: Path, element_project
             assert overview.isError is False
             assert overview.structuredContent is not None
             assert overview.structuredContent["project"]["name"] == "ExampleProject"
+
+            symbols = await session.call_tool("lookup_symbol", {"name": "FindOrder"})
+            assert symbols.isError is False
+            assert symbols.structuredContent is not None
+            assert symbols.structuredContent["resolution"] == "exact"
+
+            related = await session.call_tool("get_related_docs", {"symbol": "FindOrder", "limit": 2})
+            assert related.isError is False
+            assert related.structuredContent is not None
+            assert related.structuredContent["documentation"]["count"] >= 1
 
             console = await session.call_tool("get_console_status", {})
             assert console.isError is False

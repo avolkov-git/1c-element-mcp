@@ -12,6 +12,7 @@ from element_mcp.console import ConsoleService
 from element_mcp.documentation import DocumentationService
 from element_mcp.installation import discover_element_installations as find_element_installations
 from element_mcp.project import ProjectService
+from element_mcp.semantic import SemanticService
 from element_mcp.ui import register_ui
 from element_mcp.updates import UpdateService
 
@@ -61,6 +62,10 @@ Treat the connected root as read-only. Call get_project_overview before structur
 list_project_elements to understand YAML metadata and companion XBSL/XBQL files, then search_project_code and
 read_project_file for implementation details. Never infer an Element object from XBSL alone: pair code with its
 YAML metadata, subsystem, environment, and visibility. Never read paths outside the connected project.
+Use lookup_symbol for declarations and find_references for identifier occurrences. Their index is syntax-aware
+but lexical, not a compiler or Element Language Server: preserve ambiguity and never present a medium-confidence
+reference as proven symbol resolution. Use get_related_docs to turn a symbol or project file into a documentation
+query, then call get_document for the selected chunk.
 
 For questions about projects available through the Element Management Console, first call get_console_status.
 The Console connection is optional and must come from the MCP process environment, a configured console file, or
@@ -77,6 +82,7 @@ user confirms the local checkout path.
 def create_server(settings: ServerSettings) -> FastMCP:
     documentation = DocumentationService(settings)
     project = ProjectService(settings)
+    semantic = SemanticService(project, documentation)
     console = ConsoleService(settings)
     updates = UpdateService(settings)
     server = FastMCP(
@@ -181,6 +187,54 @@ def create_server(settings: ServerSettings) -> FastMCP:
     ) -> dict[str, Any]:
         """Read bounded lines from an Element source file by a relative path returned by project tools."""
         return project.read_file(relative_path, start_line=start_line, line_count=line_count)
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def lookup_symbol(
+        name: Annotated[str, Field(min_length=1, max_length=256)],
+        symbol_kind: Literal["all", "element", "method", "type", "structure", "enumeration", "exception"] = "all",
+        exact: bool = True,
+        limit: Annotated[int, Field(ge=1, le=50)] = 20,
+    ) -> dict[str, Any]:
+        """Find Element YAML entities and XBSL declarations, preserving overloads and lexical ambiguity."""
+        return semantic.lookup_symbol(name, symbol_kind=symbol_kind, exact=exact, limit=limit)
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def find_references(
+        name: Annotated[str, Field(min_length=1, max_length=256)],
+        file_type: Literal["all", "metadata", "xbsl", "xbql"] = "all",
+        relative_path: Annotated[str | None, Field(max_length=4096)] = None,
+        include_declarations: bool = False,
+        case_sensitive: bool = False,
+        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+    ) -> dict[str, Any]:
+        """Find exact identifier occurrences without claiming compiler-level symbol resolution."""
+        return semantic.find_references(
+            name,
+            file_type=file_type,
+            relative_path=relative_path,
+            include_declarations=include_declarations,
+            case_sensitive=case_sensitive,
+            limit=limit,
+        )
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def get_related_docs(
+        symbol: Annotated[str | None, Field(max_length=256)] = None,
+        relative_path: Annotated[str | None, Field(max_length=4096)] = None,
+        corpus: Literal["lang", "console", "server", "all"] = "lang",
+        limit: Annotated[int, Field(ge=1, le=20)] = 8,
+        current_only: bool = True,
+        product_version: Annotated[str | None, Field(max_length=64)] = None,
+    ) -> dict[str, Any]:
+        """Search normalized docs using context derived from a project symbol, source file, or both."""
+        return semantic.related_docs(
+            symbol=symbol,
+            relative_path=relative_path,
+            corpus=corpus,
+            limit=limit,
+            current_only=current_only,
+            product_version=product_version,
+        )
 
     @server.tool(annotations=READ_ONLY, structured_output=True)
     def get_documentation_status() -> dict[str, Any]:

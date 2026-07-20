@@ -5,7 +5,9 @@ from pathlib import Path
 import pytest
 
 from element_mcp.config import ServerSettings
+from element_mcp.documentation import DocumentationService
 from element_mcp.project import ProjectError, ProjectService
+from element_mcp.semantic import SemanticService
 
 
 def service(tmp_path: Path, project_path: Path | None = None) -> ProjectService:
@@ -16,6 +18,20 @@ def service(tmp_path: Path, project_path: Path | None = None) -> ProjectService:
             data_path=tmp_path / "data",
         )
     )
+
+
+def semantic_service(
+    tmp_path: Path,
+    element_project_path: Path,
+    corpus_path: Path,
+) -> SemanticService:
+    settings = ServerSettings(
+        project_path=element_project_path,
+        corpus_path=corpus_path,
+        config_path=tmp_path / "config.json",
+        data_path=tmp_path / "data",
+    )
+    return SemanticService(ProjectService(settings), DocumentationService(settings))
 
 
 def test_project_status_is_missing_before_connection(tmp_path: Path) -> None:
@@ -131,3 +147,132 @@ def test_russian_development_language_filenames_are_supported(tmp_path: Path) ->
     assert overview["subsystems"] == [{"name": "Основное", "path": "Основное"}]
     assert elements["elements"][0]["element_kind"] == "ОбщийМодуль"
     assert elements["elements"][0]["implementation_files"] == ["Основное/Сервис.xbsl"]
+
+
+def test_lookup_symbol_returns_element_and_xbsl_declarations(
+    tmp_path: Path,
+    element_project_path: Path,
+    corpus_path: Path,
+) -> None:
+    semantic = semantic_service(tmp_path, element_project_path, corpus_path)
+
+    element = semantic.lookup_symbol("Orders")
+    method = semantic.lookup_symbol("FindOrder", symbol_kind="method")
+
+    assert element["resolution"] == "exact"
+    assert element["semantic_guarantee"] is False
+    assert element["matches"][0]["symbol_kind"] == "element"
+    assert element["matches"][0]["declaration"] == {
+        "path": "Sales/Orders.yaml",
+        "line": 3,
+        "column": 7,
+        "text": "Name: Orders",
+    }
+    assert method["resolution"] == "exact"
+    assert method["matches"][0]["declaration"]["path"] == "Sales/Orders.xbsl"
+    assert method["matches"][0]["element"]["element_kind"] == "CommonModule"
+
+
+def test_lookup_symbol_preserves_overloads_and_partial_search(
+    tmp_path: Path,
+    element_project_path: Path,
+    corpus_path: Path,
+) -> None:
+    module = element_project_path / "Sales" / "Orders.xbsl"
+    module.write_text(
+        "method FindOrder(Number: String): String\n"
+        "    return Number\n"
+        ";\n"
+        "method FindOrder(Number: Number): String\n"
+        "    return Number.ToString()\n"
+        ";\n",
+        encoding="utf-8",
+    )
+    semantic = semantic_service(tmp_path, element_project_path, corpus_path)
+
+    exact = semantic.lookup_symbol("FindOrder")
+    partial = semantic.lookup_symbol("Order", exact=False)
+
+    assert exact["resolution"] == "ambiguous"
+    assert exact["total"] == 2
+    assert len({item["symbol_id"] for item in exact["matches"]}) == 2
+    assert {item["name"] for item in partial["matches"]} >= {"FindOrder", "Orders", "OrderDto"}
+
+
+def test_find_references_uses_identifier_boundaries_and_reports_lexical_limit(
+    tmp_path: Path,
+    element_project_path: Path,
+    corpus_path: Path,
+) -> None:
+    semantic = semantic_service(tmp_path, element_project_path, corpus_path)
+
+    result = semantic.find_references("Orders", include_declarations=True)
+
+    assert result["declaration_count"] == 1
+    assert result["reference_count"] == 1
+    assert result["semantic_guarantee"] is False
+    assert [(item["role"], item["path"]) for item in result["results"]] == [
+        ("declaration", "Sales/Orders.yaml"),
+        ("reference", "Sales/OrdersQueries.xbql"),
+    ]
+    assert result["results"][1]["confidence"] == "medium"
+
+
+def test_find_references_excludes_comments_strings_and_honors_file_scope(
+    tmp_path: Path,
+    element_project_path: Path,
+    corpus_path: Path,
+) -> None:
+    module = element_project_path / "Sales" / "Orders.xbsl"
+    module.write_text(
+        "method FindOrder(Number: String): String\n"
+        "    // FindOrder is mentioned in a comment\n"
+        "    /* FindOrder is mentioned in\n"
+        "       method FindOrder(Comment: String) */\n"
+        '    val Message = "FindOrder in\n'
+        '        a multiline string"\n'
+        "    return FindOrder(Number) // FindOrder again\n"
+        ";\n",
+        encoding="utf-8",
+    )
+    semantic = semantic_service(tmp_path, element_project_path, corpus_path)
+
+    result = semantic.find_references("FindOrder", relative_path="Sales/Orders.xbsl")
+
+    assert result["declaration_count"] == 1
+    assert result["reference_count"] == 1
+    assert result["count"] == 1
+    assert result["results"][0]["line"] == 7
+
+
+def test_related_docs_enriches_search_with_symbol_and_file_context(
+    tmp_path: Path,
+    element_project_path: Path,
+    corpus_path: Path,
+) -> None:
+    semantic = semantic_service(tmp_path, element_project_path, corpus_path)
+
+    result = semantic.related_docs(symbol="FindOrder", relative_path="Sales/Orders.xbsl", limit=2)
+
+    assert result["status"] == "ready"
+    assert "FindOrder" in result["derived_query"]
+    assert "метод" in result["derived_query"]
+    assert result["project_context"]["file"]["element"]["name"] == "Orders"
+    assert result["documentation"]["count"] >= 1
+    assert result["documentation"]["results"][0]["product_version"] == "9.2.4-6"
+    assert result["next_step"].endswith("get_document.")
+
+
+def test_semantic_tools_reject_invalid_symbol_and_path(
+    tmp_path: Path,
+    element_project_path: Path,
+    corpus_path: Path,
+) -> None:
+    semantic = semantic_service(tmp_path, element_project_path, corpus_path)
+
+    with pytest.raises(ValueError, match="одно корректное имя"):
+        semantic.find_references("FindOrder()")
+    with pytest.raises(ProjectError, match="за пределами активного проекта"):
+        semantic.related_docs(relative_path="../secret.yaml")
+    with pytest.raises(ValueError, match="Укажите symbol"):
+        semantic.related_docs()
