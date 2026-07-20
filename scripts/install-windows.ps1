@@ -32,7 +32,7 @@ function Write-Step {
 function Assert-LastExitCode {
     param([string]$Operation)
     if ($LASTEXITCODE -ne 0) {
-        throw "$Operation завершилась с кодом $LASTEXITCODE."
+        throw "$Operation failed with exit code $LASTEXITCODE."
     }
 }
 
@@ -55,7 +55,7 @@ function Get-PythonCommand {
         }
     }
 
-    throw "Не найден Python 3.11 или 3.12 x64. Установите Python и повторите запуск."
+    throw "Python 3.11 or 3.12 x64 was not found. Install Python and run this script again."
 }
 
 function ConvertTo-PowerShellLiteral {
@@ -63,36 +63,36 @@ function ConvertTo-PowerShellLiteral {
     return "'" + $Value.Replace("'", "''") + "'"
 }
 
-Write-Step "Проверка системных требований"
+Write-Step "Checking prerequisites"
 if ([string]::IsNullOrWhiteSpace($env:ProgramData)) {
-    throw "Переменная ProgramData не определена."
+    throw "The ProgramData environment variable is not defined."
 }
 
 $Git = Get-Command "git.exe" -ErrorAction SilentlyContinue
 if ($null -eq $Git) {
-    throw "Не найден Git for Windows. Установите Git и повторите запуск."
+    throw "Git for Windows was not found. Install Git and run this script again."
 }
 $PythonCommand = Get-PythonCommand
 $PythonExecutable = $PythonCommand[0]
 $PythonPrefixArguments = @($PythonCommand | Select-Object -Skip 1)
 
-Write-Step "Подготовка каталогов $InstallRoot"
+Write-Step "Preparing directories under $InstallRoot"
 New-Item -ItemType Directory -Force -Path $InstallRoot, $DataDirectory, $ConfigDirectory, $LogDirectory | Out-Null
 
 $ExistingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($null -ne $ExistingTask -and $ExistingTask.State -eq "Running") {
-    Write-Step "Остановка существующего задания"
+    Write-Step "Stopping the existing scheduled task"
     Stop-ScheduledTask -TaskName $TaskName
     Start-Sleep -Seconds 2
 }
 
-Write-Step "Получение исходного кода"
+Write-Step "Getting the source code"
 $GitDirectory = Join-Path $AppDirectory ".git"
 if (Test-Path -LiteralPath $GitDirectory -PathType Container) {
     $DirtyFiles = & $Git.Source -C $AppDirectory status --porcelain
-    Assert-LastExitCode "Проверка Git"
+    Assert-LastExitCode "Git status check"
     if ($DirtyFiles) {
-        throw "В $AppDirectory есть локальные изменения. Сохраните их перед обновлением."
+        throw "$AppDirectory contains local changes. Save them before updating."
     }
     & $Git.Source -C $AppDirectory fetch origin
     Assert-LastExitCode "git fetch"
@@ -105,39 +105,39 @@ else {
     if (Test-Path -LiteralPath $AppDirectory) {
         $ExistingFiles = Get-ChildItem -LiteralPath $AppDirectory -Force -ErrorAction SilentlyContinue
         if ($ExistingFiles) {
-            throw "Каталог установки уже существует и не является Git-репозиторием: $AppDirectory"
+            throw "The install directory already exists and is not a Git repository: $AppDirectory"
         }
     }
 
     $GitHub = Get-Command "gh.exe" -ErrorAction SilentlyContinue
     if ($null -ne $GitHub) {
         & $GitHub.Source repo clone $Repository $AppDirectory
-        Assert-LastExitCode "gh repo clone. Проверьте gh auth status или переменную GH_TOKEN"
+        Assert-LastExitCode "gh repo clone. Check gh auth status or the GH_TOKEN environment variable"
     }
     else {
         $RepositoryUrl = "https://github.com/$Repository.git"
         & $Git.Source clone $RepositoryUrl $AppDirectory
-        Assert-LastExitCode "git clone. Для приватного репозитория предварительно настройте Git Credential Manager"
+        Assert-LastExitCode "git clone. Configure Git Credential Manager first when using a private repository"
     }
     & $Git.Source -C $AppDirectory checkout $Revision
     Assert-LastExitCode "git checkout"
 }
 
-Write-Step "Создание Python-окружения"
+Write-Step "Creating the Python environment"
 if (-not (Test-Path -LiteralPath $VenvDirectory -PathType Container)) {
     & $PythonExecutable @PythonPrefixArguments -m venv $VenvDirectory
-    Assert-LastExitCode "Создание venv"
+    Assert-LastExitCode "venv creation"
 }
 
 $VenvPython = Join-Path $VenvDirectory "Scripts\python.exe"
 $McpExecutable = Join-Path $VenvDirectory "Scripts\element-mcp.exe"
 & $VenvPython -m pip install --upgrade pip
-Assert-LastExitCode "Обновление pip"
+Assert-LastExitCode "pip upgrade"
 & $VenvPython -m pip install --upgrade $AppDirectory
-Assert-LastExitCode "Установка 1c-element-mcp"
+Assert-LastExitCode "1c-element-mcp installation"
 
 $InstalledVersion = & $McpExecutable --version
-Assert-LastExitCode "Проверка element-mcp"
+Assert-LastExitCode "element-mcp version check"
 
 $QuotedExecutable = ConvertTo-PowerShellLiteral $McpExecutable
 $QuotedConfig = ConvertTo-PowerShellLiteral $ConfigPath
@@ -150,7 +150,7 @@ $RunnerContent = @"
 $RunnerContent | Set-Content -LiteralPath $RunnerPath -Encoding UTF8
 
 if ($RegisterStartupTask) {
-    Write-Step "Регистрация запуска при старте Windows"
+    Write-Step "Registering startup with Windows Task Scheduler"
     $PowerShellExecutable = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
     $ActionArguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$RunnerPath`""
     $Action = New-ScheduledTaskAction -Execute $PowerShellExecutable -Argument $ActionArguments
@@ -177,21 +177,21 @@ if ($RegisterStartupTask) {
 
     $Listener = Get-NetTCPConnection -State Listen -LocalAddress "127.0.0.1" -LocalPort $Port -ErrorAction SilentlyContinue
     if ($null -eq $Listener) {
-        Write-Warning "Процесс зарегистрирован, но порт $Port пока не слушается. Проверьте лог: $LogPath"
+        Write-Warning "The task is registered, but port $Port is not listening yet. Check the log: $LogPath"
     }
 }
 
-Write-Host "`nУстановка завершена." -ForegroundColor Green
-Write-Host "Версия:       $InstalledVersion"
+Write-Host "`nInstallation completed." -ForegroundColor Green
+Write-Host "Version:      $InstalledVersion"
 Write-Host "MCP endpoint: http://127.0.0.1:$Port/mcp"
-Write-Host "Приложение:   $AppDirectory"
-Write-Host "Конфигурация: $ConfigPath"
-Write-Host "Данные:       $DataDirectory"
-Write-Host "Лог:          $LogPath"
+Write-Host "Application:  $AppDirectory"
+Write-Host "Configuration:$ConfigPath"
+Write-Host "Data:         $DataDirectory"
+Write-Host "Log:          $LogPath"
 if ($RegisterStartupTask) {
-    Write-Host "Задание:      $TaskName (SYSTEM, AtStartup)"
+    Write-Host "Task:         $TaskName (SYSTEM, AtStartup)"
 }
 else {
-    Write-Host "Для ручного запуска выполните: powershell.exe -ExecutionPolicy Bypass -File `"$RunnerPath`""
+    Write-Host "Run manually with: powershell.exe -ExecutionPolicy Bypass -File `"$RunnerPath`""
 }
-Write-Host "`nПорт привязан только к loopback. Скрипт не создаёт правило Windows Firewall и не публикует MCP в интернет."
+Write-Host "`nThe port is bound to loopback only. This script does not create a Windows Firewall rule or expose MCP to the internet."
