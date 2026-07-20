@@ -61,10 +61,17 @@ Requester = Callable[[str, str, Mapping[str, str], bytes | None, ssl.SSLContext 
 
 
 class ConsoleContextResolver:
-    def __init__(self, settings: ServerSettings, *, environ: Mapping[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        settings: ServerSettings,
+        *,
+        environ: Mapping[str, str] | None = None,
+        session_store: ConsoleSessionStore | None = None,
+    ) -> None:
         self.settings = settings
         self.environ = environ if environ is not None else os.environ
         self.config_store = ConfigurationStore(settings.resolved_config_path)
+        self.session_store = session_store
 
     def resolve(self) -> ConsoleConnection:
         problems: list[str] = []
@@ -83,6 +90,10 @@ class ConsoleContextResolver:
 
     def _candidates(self) -> list[tuple[str, dict[str, Any]]]:
         candidates: list[tuple[str, dict[str, Any]]] = []
+        if self.session_store:
+            session_values = self.session_store.get()
+            if session_values:
+                candidates.append(("ide_session", session_values))
         environment_values = _environment_values(self.environ)
         if environment_values:
             candidates.append(("environment", environment_values))
@@ -128,6 +139,26 @@ class ConsoleContextResolver:
                 if path.is_file() and path not in candidates:
                     candidates.append(path)
         return candidates
+
+
+class ConsoleSessionStore:
+    """Keep an IDE-provided Console connection in memory, never in the corpus or MCP config."""
+
+    def __init__(self) -> None:
+        self._values: dict[str, Any] | None = None
+        self._lock = threading.Lock()
+
+    def get(self) -> dict[str, Any] | None:
+        with self._lock:
+            return dict(self._values) if self._values else None
+
+    def set(self, values: Mapping[str, Any]) -> None:
+        with self._lock:
+            self._values = dict(values)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._values = None
 
 
 class ConsoleHttpClient:
@@ -228,8 +259,38 @@ class ConsoleService:
         resolver: ConsoleContextResolver | None = None,
         client: ConsoleHttpClient | None = None,
     ) -> None:
-        self.resolver = resolver or ConsoleContextResolver(settings)
+        self.session_store = resolver.session_store if resolver and resolver.session_store else ConsoleSessionStore()
+        self.resolver = resolver or ConsoleContextResolver(settings, session_store=self.session_store)
+        if self.resolver.session_store is None:
+            self.resolver.session_store = self.session_store
         self.client = client or ConsoleHttpClient()
+
+    def configure_ide_session(self, values: Mapping[str, Any]) -> dict[str, Any]:
+        """Validate and activate an IDE handoff without returning or persisting credentials."""
+        allowed = {
+            "server",
+            "client_id",
+            "client_secret",
+            "access_token",
+            "project_id",
+            "space_id",
+            "verify_tls",
+            "ca_bundle",
+        }
+        sanitized = {key: value for key, value in values.items() if key in allowed}
+        connection = _connection_from_values(sanitized, source="ide_session")
+        spaces = _as_items(self.client.get(connection, "/api/v2/spaces"), resource="пространств")
+        self.session_store.set(sanitized)
+        return {
+            "status": "ready",
+            "connection": connection.public_info(),
+            "spaces_count": len(spaces),
+            "message": "Контекст текущей IDE подключён к MCP до перезапуска сервера",
+        }
+
+    def clear_ide_session(self) -> dict[str, Any]:
+        self.session_store.clear()
+        return {"status": "cleared", "message": "Временный контекст IDE отключён"}
 
     def status(self) -> dict[str, Any]:
         try:

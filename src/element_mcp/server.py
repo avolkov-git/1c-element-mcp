@@ -90,7 +90,7 @@ def create_server(settings: ServerSettings) -> FastMCP:
     # FastMCP 1.x does not expose the low-level server version in its constructor.
     # Without this assignment clients would see the SDK version instead of our SemVer.
     server._mcp_server.version = __version__
-    register_ui(server, settings, updates)
+    register_ui(server, settings, updates, console)
 
     @server.tool(annotations=READ_ONLY, structured_output=True)
     def get_corpus_info() -> dict[str, Any]:

@@ -290,6 +290,74 @@ def test_console_status_distinguishes_forbidden_from_empty(tmp_path: Path) -> No
     assert result == {"status": "forbidden", "http_status": 403, "message": "Нет прав"}
 
 
+def test_verified_ide_session_is_used_without_persisting_or_exposing_secret(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    def requester(method: str, url: str, headers: Any, body: bytes | None, context: Any, timeout: float) -> Any:
+        calls.append(url)
+        if url.endswith("/sys/token"):
+            return {"id_token": "ide-token"}
+        if url.endswith("/api/v2/spaces"):
+            assert headers["Authorization"] == "Bearer ide-token"
+            return [space_response(SPACE_ID, "Основное")]
+        raise AssertionError(url)
+
+    config_path = tmp_path / "config.json"
+    service = ConsoleService(
+        ServerSettings(config_path=config_path),
+        client=ConsoleHttpClient(requester=requester),
+    )
+
+    handoff = service.configure_ide_session(
+        {
+            "server": "https://element.example/console",
+            "client_id": "ide-client",
+            "client_secret": "ide-secret",
+            "project_id": PROJECT_ID,
+            "ignored": "must-not-be-stored",
+        }
+    )
+    status = service.status()
+
+    assert handoff["status"] == "ready"
+    assert handoff["connection"]["source"] == "ide_session"
+    assert status["connection"]["source"] == "ide_session"
+    assert status["spaces_count"] == 1
+    assert "ide-secret" not in json.dumps(handoff)
+    assert not config_path.exists()
+    assert service.session_store.get() == {
+        "server": "https://element.example/console",
+        "client_id": "ide-client",
+        "client_secret": "ide-secret",
+        "project_id": PROJECT_ID,
+    }
+    assert len([url for url in calls if url.endswith("/sys/token")]) == 1
+
+
+def test_rejected_ide_session_does_not_replace_existing_connection(tmp_path: Path) -> None:
+    def requester(method: str, url: str, headers: Any, body: bytes | None, context: Any, timeout: float) -> Any:
+        if "good.example" in url and url.endswith("/sys/token"):
+            return {"id_token": "good-token"}
+        if "good.example" in url and url.endswith("/api/v2/spaces"):
+            return []
+        raise ConsoleRequestError("Нет прав", status_code=403)
+
+    service = ConsoleService(
+        ServerSettings(config_path=tmp_path / "config.json"),
+        client=ConsoleHttpClient(requester=requester),
+    )
+    service.configure_ide_session(
+        {"server": "https://good.example/console", "access_token": "good-token"}
+    )
+
+    with pytest.raises(ConsoleRequestError):
+        service.configure_ide_session(
+            {"server": "https://bad.example/console", "access_token": "bad-token"}
+        )
+
+    assert service.status()["connection"]["base_url"] == "https://good.example/console"
+
+
 def project_response(project_id: str, name: str, *, space_id: str, deleted: bool = False) -> dict[str, Any]:
     return {
         "id": project_id,

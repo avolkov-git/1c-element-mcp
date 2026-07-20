@@ -28,7 +28,7 @@ def test_stdio_server_exposes_read_only_tools(corpus_path: Path, element_project
         ):
             initialized = await session.initialize()
             assert initialized.serverInfo.name == "1C Element"
-            assert initialized.serverInfo.version == "0.7.0"
+            assert initialized.serverInfo.version == "0.8.0"
             assert initialized.instructions is not None
             assert "first call\nget_documentation_status" in initialized.instructions
             assert "Never call start_documentation_build without that consent" in initialized.instructions

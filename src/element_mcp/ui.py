@@ -9,6 +9,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 
 from element_mcp.config import ServerSettings
+from element_mcp.console import ConsoleConfigurationError, ConsoleRequestError, ConsoleService
 from element_mcp.updates import UpdateError, UpdateService
 
 
@@ -16,7 +17,7 @@ def _asset(name: str) -> str:
     return resources.files("element_mcp").joinpath("ui_assets", name).read_text(encoding="utf-8")
 
 
-def register_ui(server, settings: ServerSettings, updates: UpdateService) -> None:
+def register_ui(server, settings: ServerSettings, updates: UpdateService, console: ConsoleService) -> None:
     allowed_hosts = {"127.0.0.1", "localhost", "::1", settings.host.lower()}
 
     def host_allowed(request: Request) -> bool:
@@ -114,3 +115,33 @@ def register_ui(server, settings: ServerSettings, updates: UpdateService) -> Non
         except UpdateError as error:
             return JSONResponse({"message": str(error)}, status_code=409)
         return JSONResponse(result, status_code=202, headers={"Cache-Control": "no-store"})
+
+    @server.custom_route("/api/integrations/element-console", methods=["POST", "DELETE"], include_in_schema=False)
+    async def configure_element_console(request: Request) -> Response:
+        if not mutation_allowed(request):
+            return JSONResponse({"message": "Недопустимый локальный запрос"}, status_code=403)
+        if request.method == "DELETE":
+            return JSONResponse(console.clear_ide_session(), headers={"Cache-Control": "no-store"})
+        try:
+            content_length = int(request.headers.get("content-length", "0") or 0)
+        except ValueError:
+            return JSONResponse({"message": "Некорректная длина запроса"}, status_code=400)
+        if content_length <= 0 or content_length > 64 * 1024:
+            return JSONResponse({"message": "Некорректный размер контекста IDE"}, status_code=413)
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"message": "Контекст IDE должен быть JSON-объектом"}, status_code=400)
+        if not isinstance(payload, dict):
+            return JSONResponse({"message": "Контекст IDE должен быть JSON-объектом"}, status_code=400)
+        try:
+            result = await anyio.to_thread.run_sync(console.configure_ide_session, payload)
+        except ConsoleConfigurationError as error:
+            return JSONResponse({"status": "invalid", "message": str(error)}, status_code=400)
+        except ConsoleRequestError as error:
+            status_code = error.status_code if error.status_code in {401, 403} else 502
+            return JSONResponse(
+                {"status": "rejected", "http_status": error.status_code, "message": str(error)},
+                status_code=status_code,
+            )
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})

@@ -8,6 +8,7 @@ from pathlib import Path
 from starlette.testclient import TestClient
 
 from element_mcp.config import ServerSettings
+from element_mcp.console import ConsoleService
 from element_mcp.server import create_server
 
 
@@ -44,7 +45,7 @@ def test_ui_reports_running_server_and_protects_mutations(tmp_path: Path) -> Non
 
         status = client.get("/api/status")
         assert status.status_code == 200
-        assert status.json()["server"] == {"state": "running", "version": "0.7.0"}
+        assert status.json()["server"] == {"state": "running", "version": "0.8.0"}
 
         assert client.post("/api/updates/check").status_code == 403
         token = re.search(r'name="element-mcp-token" content="([^"]+)"', page.text).group(1)  # type: ignore[union-attr]
@@ -96,3 +97,41 @@ def test_ui_rejects_unexpected_host_header(tmp_path: Path) -> None:
     server = create_server(ServerSettings(data_path=tmp_path / "data", host="127.0.0.1"))
     with TestClient(server.streamable_http_app(), base_url="http://unexpected.example") as client:
         assert client.get("/").status_code == 403
+
+
+def test_ui_accepts_verified_ide_handoff_without_returning_secret(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def configure(self, values):
+        captured.update(values)
+        return {
+            "status": "ready",
+            "connection": {"source": "ide_session", "client_id_present": True},
+            "spaces_count": 2,
+        }
+
+    monkeypatch.setattr(ConsoleService, "configure_ide_session", configure)
+    server = create_server(ServerSettings(data_path=tmp_path / "data", host="127.0.0.1"))
+    with TestClient(server.streamable_http_app(), base_url="http://127.0.0.1") as client:
+        page = client.get("/")
+        token = re.search(r'name="element-mcp-token" content="([^"]+)"', page.text).group(1)  # type: ignore[union-attr]
+        payload = {
+            "server": "https://element.example/console",
+            "client_id": "ide-client",
+            "client_secret": "ide-secret",
+        }
+        assert client.post("/api/integrations/element-console", json=payload).status_code == 403
+
+        response = client.post(
+            "/api/integrations/element-console",
+            json=payload,
+            headers={"X-Element-MCP-Token": token},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["connection"]["source"] == "ide_session"
+        assert "ide-secret" not in response.text
+        assert captured["client_secret"] == "ide-secret"
