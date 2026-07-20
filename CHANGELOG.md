@@ -2,6 +2,12 @@
 
 Проект следует [Semantic Versioning](https://semver.org/).
 
+## [0.2.2] - 2026-07-20
+
+- Добавлен повторно запускаемый PowerShell-установщик для Windows Server.
+- Установщик регистрирует MCP в Task Scheduler от `SYSTEM`, хранит данные в `ProgramData` и слушает `127.0.0.1:9900`.
+- CI расширен на Windows для Python 3.11 и 3.12.
+
 ## [0.2.1] - 2026-07-20
 
 - Порт Streamable HTTP по умолчанию изменён с `8000` на `9900`.

@@ -11,7 +11,7 @@ from element_mcp.cli import build_parser, main
 
 def test_package_version_matches_pyproject() -> None:
     project = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8"))
-    assert __version__ == project["project"]["version"] == "0.2.1"
+    assert __version__ == project["project"]["version"] == "0.2.2"
 
 
 def test_default_http_port_is_9900(monkeypatch: pytest.MonkeyPatch) -> None:
