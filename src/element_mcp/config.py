@@ -88,7 +88,7 @@ class ServerSettings:
     data_path: Path | None = None
     transport: str = "stdio"
     host: str = "127.0.0.1"
-    port: int = 8000
+    port: int = 9900
 
     @property
     def resolved_config_path(self) -> Path:

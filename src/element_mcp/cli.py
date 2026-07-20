@@ -32,7 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path(value) if (value := os.environ.get("ELEMENT_MCP_DATA_PATH")) else None,
     )
     parser.add_argument("--host", default=os.environ.get("ELEMENT_MCP_HOST", "127.0.0.1"))
-    parser.add_argument("--port", type=int, default=os.environ.get("ELEMENT_MCP_PORT", "8000"))
+    parser.add_argument("--port", type=int, default=os.environ.get("ELEMENT_MCP_PORT", "9900"))
     return parser
 
 
