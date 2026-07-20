@@ -23,18 +23,38 @@ LOCAL_IDEMPOTENT_WRITE = ToolAnnotations(
 )
 CANCEL_JOB = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False)
 
+SERVER_INSTRUCTIONS = """
+For every question about normalized 1C:Enterprise.Element documentation, first call
+get_documentation_status. If status is ready, report the exact corpus path, Element version, and document and
+chunk counts; do not rebuild it. If status is invalid, report the validation errors, offer a rebuild, and never
+activate the invalid corpus. If status is missing, explain that the corpus is absent and ask for explicit user
+consent before creating it. Never call start_documentation_build without that consent. A build for Element
+9.2.4-6 creates about 620 MB and can take several minutes.
+
+After consent, call discover_element_installations. Use the only result after naming its path and version. If
+there are multiple results, ask the user to select one. If there are none, ask for the Element server bundle
+path and explain that a valid bundle contains docs, lib, ide, and executor. Do not scan the disk yourself and do
+not treat a deployed server instance directory as a complete bundle.
+
+Call start_documentation_build with bundle_path only unless the user explicitly chose output_path. Save job_id
+and poll get_documentation_build_status until completed, failed, or cancelled. Do not start another build while
+one is running. On completion, report the result path, Element and normalizer versions, document and chunk
+counts, validation result, and that the corpus is active. On failure, report the stage and error; never claim the
+corpus is active. A previous active corpus remains unchanged.
+
+For an existing normalized corpus, call activate_documentation and report success only when status is ready.
+Call cancel_documentation_build only after an explicit user request; cancellation does not remove or alter the
+active corpus. For answers about Element, call search_docs first, then get_document for the selected chunk.
+Preserve product_version, source_version, and provenance whenever they matter to the answer.
+""".strip()
+
 
 def create_server(settings: ServerSettings) -> FastMCP:
     documentation = DocumentationService(settings)
     updates = UpdateService(settings)
     server = FastMCP(
         name="1C Element Documentation",
-        instructions=(
-            "First call get_documentation_status when the user asks whether normalized documentation exists. "
-            "If it is missing, ask before creating hundreds of megabytes, discover an installed Element bundle, "
-            "then start and monitor a local documentation build. Search first, then read the selected chunk. "
-            "Preserve product_version, source_version and provenance in answers."
-        ),
+        instructions=SERVER_INSTRUCTIONS,
         host=settings.host,
         port=settings.port,
         stateless_http=True,
@@ -52,12 +72,12 @@ def create_server(settings: ServerSettings) -> FastMCP:
 
     @server.tool(annotations=READ_ONLY, structured_output=True)
     def get_documentation_status() -> dict[str, Any]:
-        """Check whether a complete normalized lang, console, and server corpus is configured and valid."""
+        """Call first to classify the complete lang, console, and server corpus as ready, invalid, or missing."""
         return {"server_version": __version__, **documentation.documentation_status()}
 
     @server.tool(annotations=READ_ONLY, structured_output=True)
     def discover_element_installations() -> dict[str, Any]:
-        """Find valid Element server component bundles in standard Windows and Linux installation paths."""
+        """After build consent, find valid Element bundles in standard Windows and Linux installation paths."""
         installations = find_element_installations()
         return {
             "count": len(installations),
@@ -74,28 +94,28 @@ def create_server(settings: ServerSettings) -> FastMCP:
         bundle_path: Annotated[str, Field(min_length=1, max_length=4096)],
         output_path: Annotated[str | None, Field(max_length=4096)] = None,
     ) -> dict[str, Any]:
-        """Start a background local build of lang, console, server, JSONL, SQLite, and vector indexes."""
+        """After explicit user consent, build lang, console, server, JSONL, SQLite, and vector indexes locally."""
         return documentation.jobs.start(bundle_path=bundle_path, output_path=output_path)
 
     @server.tool(annotations=READ_ONLY, structured_output=True)
     def get_documentation_build_status(
         job_id: Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")],
     ) -> dict[str, Any]:
-        """Return progress and the final validation report for a documentation build job."""
+        """Poll a build job until completed, failed, or cancelled and return its final validation report."""
         return documentation.jobs.status(job_id)
 
     @server.tool(annotations=CANCEL_JOB, structured_output=True)
     def cancel_documentation_build(
         job_id: Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")],
     ) -> dict[str, Any]:
-        """Stop a documentation build started by this MCP process without touching the active corpus."""
+        """Only on explicit request, stop this process's build without changing the active corpus."""
         return documentation.jobs.cancel(job_id)
 
     @server.tool(annotations=LOCAL_IDEMPOTENT_WRITE, structured_output=True)
     def activate_documentation(
         corpus_path: Annotated[str, Field(min_length=1, max_length=4096)],
     ) -> dict[str, Any]:
-        """Fully validate an existing normalized corpus and save it as the active MCP corpus."""
+        """Validate an existing normalized corpus and activate it only when its status is ready."""
         return documentation.activate(corpus_path)
 
     @server.tool(annotations=READ_ONLY, structured_output=True)
@@ -106,7 +126,7 @@ def create_server(settings: ServerSettings) -> FastMCP:
         current_only: bool = True,
         product_version: Annotated[str | None, Field(max_length=64)] = None,
     ) -> dict[str, Any]:
-        """Search the normalized Element corpus and return ranked chunks with versioned provenance."""
+        """Search first for Element answers and return ranked chunks with versioned provenance."""
         return documentation.repository().search(
             query=query,
             corpus=corpus,
@@ -120,7 +140,7 @@ def create_server(settings: ServerSettings) -> FastMCP:
         chunk_id: Annotated[str, Field(min_length=1, max_length=512)],
         context_chunks: Annotated[int, Field(ge=0, le=2)] = 1,
     ) -> dict[str, Any]:
-        """Read a search result and up to two neighboring chunks on each side from the same document."""
+        """After search_docs, read the selected result and neighboring chunks from the same document."""
         return documentation.repository().document_context(chunk_id=chunk_id, context_chunks=context_chunks)
 
     return server
