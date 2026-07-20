@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import element_mcp.language_server as language_server_module
 from element_mcp.config import ServerSettings
 from element_mcp.documentation import DocumentationService
 from element_mcp.language_server import (
@@ -57,7 +58,11 @@ def service(
     return LanguageServerService(settings, project, semantic)
 
 
-def test_runtime_validation_matches_bundle_lsp_and_java(tmp_path: Path) -> None:
+def test_runtime_validation_matches_bundle_lsp_and_java(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(language_server_module, "_java_version", lambda _path: 17)
     runtime = inspect_language_server_runtime(
         make_bundle(tmp_path / "bundle"),
         make_java(tmp_path),
@@ -124,7 +129,9 @@ def test_configure_persists_validated_runtime(
     tmp_path: Path,
     element_project_path: Path,
     corpus_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(language_server_module, "_java_version", lambda _path: 17)
     language_server = service(tmp_path, element_project_path, corpus_path)
     bundle = make_bundle(tmp_path / "bundle")
     java = make_java(tmp_path)
