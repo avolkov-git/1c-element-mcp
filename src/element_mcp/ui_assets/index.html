@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="element-mcp-token" content="{{CSRF_TOKEN}}">
+    <title>1C Element MCP</title>
+    <link rel="stylesheet" href="/ui/styles.css">
+    <script src="/ui/app.js" defer></script>
+  </head>
+  <body>
+    <main class="page">
+      <section class="panel" aria-labelledby="page-title">
+        <header class="header">
+          <h1 id="page-title">1C Element MCP</h1>
+          <p>Локальный сервер для работы ИИ-агентов с 1С:Элемент.</p>
+        </header>
+
+        <div class="runtime-status">
+          <span class="status-dot" aria-hidden="true"></span>
+          <div>
+            <h2>MCP работает</h2>
+            <p>Сервер отвечает на этом компьютере.</p>
+          </div>
+        </div>
+
+        <dl class="metadata">
+          <div class="metadata-row">
+            <dt>Версия</dt>
+            <dd id="server-version">—</dd>
+          </div>
+          <div class="metadata-row">
+            <dt>Источник обновлений</dt>
+            <dd id="update-source">—</dd>
+          </div>
+        </dl>
+
+        <div class="update-area">
+          <div class="update-copy" aria-live="polite" aria-atomic="true">
+            <h2 id="update-title">Проверяем обновления</h2>
+            <p id="update-message">Это может занять несколько секунд.</p>
+          </div>
+          <button id="update-action" type="button" disabled>
+            <span class="button-label">Проверяем…</span>
+          </button>
+        </div>
+      </section>
+      <p class="endpoint">MCP endpoint: <code>/mcp</code></p>
+    </main>
+  </body>
+</html>

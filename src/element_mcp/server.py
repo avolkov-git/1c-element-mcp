@@ -10,6 +10,8 @@ from element_mcp import __version__
 from element_mcp.config import ServerSettings
 from element_mcp.documentation import DocumentationService
 from element_mcp.installation import discover_element_installations as find_element_installations
+from element_mcp.ui import register_ui
+from element_mcp.updates import UpdateService
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
 LOCAL_WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
@@ -24,6 +26,7 @@ CANCEL_JOB = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempoten
 
 def create_server(settings: ServerSettings) -> FastMCP:
     documentation = DocumentationService(settings)
+    updates = UpdateService(settings)
     server = FastMCP(
         name="1C Element Documentation",
         instructions=(
@@ -40,6 +43,7 @@ def create_server(settings: ServerSettings) -> FastMCP:
     # FastMCP 1.x does not expose the low-level server version in its constructor.
     # Without this assignment clients would see the SDK version instead of our SemVer.
     server._mcp_server.version = __version__
+    register_ui(server, settings, updates)
 
     @server.tool(annotations=READ_ONLY, structured_output=True)
     def get_corpus_info() -> dict[str, Any]:

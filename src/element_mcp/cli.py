@@ -33,6 +33,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--host", default=os.environ.get("ELEMENT_MCP_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=os.environ.get("ELEMENT_MCP_PORT", "9900"))
+    parser.add_argument(
+        "--update-repository-path",
+        type=Path,
+        default=Path(value) if (value := os.environ.get("ELEMENT_MCP_UPDATE_REPOSITORY_PATH")) else None,
+    )
+    parser.add_argument(
+        "--update-source-path",
+        type=Path,
+        default=Path(value) if (value := os.environ.get("ELEMENT_MCP_UPDATE_SOURCE_PATH")) else None,
+    )
+    parser.add_argument("--update-revision", default=os.environ.get("ELEMENT_MCP_UPDATE_REVISION", "master"))
+    parser.add_argument("--update-task-name", default=os.environ.get("ELEMENT_MCP_UPDATE_TASK_NAME"))
     return parser
 
 
@@ -55,6 +67,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"Версия {__version__} разрешает Streamable HTTP только на loopback-интерфейсе: "
             "аутентификация удалённого доступа ещё не реализована."
         )
+    if not args.update_revision or any(character.isspace() for character in args.update_revision):
+        parser.error("--update-revision должен быть непустым именем ветки или ревизии без пробелов")
 
     settings = ServerSettings(
         corpus_path=args.corpus_path.expanduser().resolve() if args.corpus_path else None,
@@ -63,6 +77,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         transport=args.transport,
         host=args.host,
         port=args.port,
+        update_repository_path=(
+            args.update_repository_path.expanduser().resolve() if args.update_repository_path else None
+        ),
+        update_source_path=args.update_source_path.expanduser().resolve() if args.update_source_path else None,
+        update_revision=args.update_revision,
+        update_task_name=args.update_task_name,
     )
     server = create_server(settings)
 

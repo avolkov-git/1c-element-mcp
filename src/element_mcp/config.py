@@ -89,6 +89,10 @@ class ServerSettings:
     transport: str = "stdio"
     host: str = "127.0.0.1"
     port: int = 9900
+    update_repository_path: Path | None = None
+    update_source_path: Path | None = None
+    update_revision: str = "master"
+    update_task_name: str | None = None
 
     @property
     def resolved_config_path(self) -> Path:
@@ -97,3 +101,11 @@ class ServerSettings:
     @property
     def resolved_data_path(self) -> Path:
         return self.data_path.expanduser().resolve() if self.data_path else default_data_path()
+
+    @property
+    def resolved_update_repository_path(self) -> Path | None:
+        return self.update_repository_path.expanduser().resolve() if self.update_repository_path else None
+
+    @property
+    def resolved_update_source_path(self) -> Path | None:
+        return self.update_source_path.expanduser().resolve() if self.update_source_path else None

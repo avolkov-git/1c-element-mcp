@@ -1,0 +1,138 @@
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from element_mcp import updater
+from element_mcp.config import ServerSettings
+from element_mcp.updates import UpdateError, UpdateService, safe_error_detail, safe_source_label
+
+
+def git(path: Path, *arguments: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(path), *arguments],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def write_version(path: Path, version: str) -> None:
+    (path / "pyproject.toml").write_text(
+        f'[project]\nname = "1c-element-mcp"\nversion = "{version}"\n',
+        encoding="utf-8",
+    )
+
+
+def make_update_repositories(tmp_path: Path) -> tuple[Path, Path, str]:
+    source = tmp_path / "source"
+    source.mkdir()
+    git(source, "init", "-b", "master")
+    git(source, "config", "user.email", "test@example.invalid")
+    git(source, "config", "user.name", "Test")
+    write_version(source, "0.3.0")
+    git(source, "add", "pyproject.toml")
+    git(source, "commit", "-m", "initial")
+
+    target = tmp_path / "target"
+    subprocess.run(["git", "clone", "--quiet", str(source), str(target)], check=True)
+    previous_commit = git(target, "rev-parse", "HEAD")
+
+    write_version(source, "0.3.1")
+    git(source, "add", "pyproject.toml")
+    git(source, "commit", "-m", "update")
+    return source, target, previous_commit
+
+
+def test_local_source_reports_available_update(tmp_path: Path) -> None:
+    source, target, _ = make_update_repositories(tmp_path)
+    service = UpdateService(
+        ServerSettings(
+            data_path=tmp_path / "data",
+            update_repository_path=target,
+            update_source_path=source,
+        )
+    )
+
+    status = service.check()
+
+    assert status["updates"]["state"] == "available"
+    assert status["updates"]["available_version"] == "0.3.1"
+    assert status["updates"]["source"]["kind"] == "local"
+
+
+def test_closed_network_failure_does_not_report_server_failure(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    git(repository, "init", "-b", "master")
+    git(repository, "config", "user.email", "test@example.invalid")
+    git(repository, "config", "user.name", "Test")
+    write_version(repository, "0.3.0")
+    git(repository, "add", "pyproject.toml")
+    git(repository, "commit", "-m", "initial")
+    git(repository, "remote", "add", "origin", "https://127.0.0.1:1/unavailable.git")
+    service = UpdateService(ServerSettings(data_path=tmp_path / "data", update_repository_path=repository))
+
+    status = service.check()
+
+    assert status["server"]["state"] == "running"
+    assert status["updates"]["state"] == "unavailable"
+    assert status["updates"]["message"] == "Проверка обновлений недоступна. MCP продолжает работать."
+
+
+def test_updater_fast_forwards_managed_repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source, target, _ = make_update_repositories(tmp_path)
+    monkeypatch.setattr(updater, "_task", lambda *args, **kwargs: None)
+    monkeypatch.setattr(updater, "_install", lambda *args, **kwargs: None)
+    monkeypatch.setattr(updater.time, "sleep", lambda *args: None)
+
+    result = updater.perform_update(
+        repository_path=target,
+        source_path=source,
+        revision="master",
+        server_task_name="test-server",
+        status_path=tmp_path / "status.json",
+    )
+
+    assert result["state"] == "success"
+    assert git(target, "show", "HEAD:pyproject.toml").endswith('version = "0.3.1"')
+
+
+def test_updater_rolls_back_when_installation_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source, target, previous_commit = make_update_repositories(tmp_path)
+    attempts = 0
+
+    def install(_path: Path) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise UpdateError("simulated install failure")
+
+    monkeypatch.setattr(updater, "_task", lambda *args, **kwargs: None)
+    monkeypatch.setattr(updater, "_install", install)
+    monkeypatch.setattr(updater.time, "sleep", lambda *args: None)
+
+    result = updater.perform_update(
+        repository_path=target,
+        source_path=source,
+        revision="master",
+        server_task_name="test-server",
+        status_path=tmp_path / "status.json",
+    )
+
+    assert result["state"] == "error"
+    assert result["rolled_back"] is True
+    assert git(target, "rev-parse", "HEAD") == previous_commit
+
+
+def test_safe_source_label_removes_url_credentials() -> None:
+    assert safe_source_label("https://token@example.com/owner/repo.git") == "https://example.com/owner/repo.git"
+
+
+def test_safe_error_detail_removes_url_credentials() -> None:
+    detail = "fatal: unable to access 'https://user:secret@example.com/owner/repo.git/'"
+    assert "secret" not in safe_error_detail(detail)
+    assert "https://example.com/owner/repo.git/" in safe_error_detail(detail)

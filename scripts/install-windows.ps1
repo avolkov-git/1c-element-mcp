@@ -8,6 +8,7 @@ param(
     [string]$InstallRoot = "$env:ProgramData\1c-element-mcp",
     [ValidateRange(1, 65535)]
     [int]$Port = 9900,
+    [string]$UpdateSourcePath = "",
     [bool]$RegisterStartupTask = $true
 )
 
@@ -15,14 +16,20 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $TaskName = "1C Element MCP"
+$UpdaterTaskName = "1C Element MCP Updater"
 $AppDirectory = Join-Path $InstallRoot "app"
 $DataDirectory = Join-Path $InstallRoot "data"
 $ConfigDirectory = Join-Path $InstallRoot "config"
 $ConfigPath = Join-Path $ConfigDirectory "config.json"
 $LogDirectory = Join-Path $InstallRoot "logs"
 $LogPath = Join-Path $LogDirectory "server.log"
+$UpdateStatusPath = Join-Path $DataDirectory "update-status.json"
 $RunnerPath = Join-Path $InstallRoot "run-server.ps1"
 $VenvDirectory = Join-Path $AppDirectory ".venv"
+
+if (-not [string]::IsNullOrWhiteSpace($UpdateSourcePath)) {
+    $UpdateSourcePath = [System.IO.Path]::GetFullPath($UpdateSourcePath)
+}
 
 function Write-Step {
     param([string]$Message)
@@ -115,18 +122,27 @@ if ($null -ne $ExistingTask -and $ExistingTask.State -eq "Running") {
 
 Write-Step "Getting the source code"
 $GitDirectory = Join-Path $AppDirectory ".git"
+$InstallSource = "origin"
+if (-not [string]::IsNullOrWhiteSpace($UpdateSourcePath)) {
+    if (-not (Test-Path -LiteralPath $UpdateSourcePath -PathType Container)) {
+        throw "The local update source does not exist: $UpdateSourcePath"
+    }
+    & $Git.Source -C $UpdateSourcePath rev-parse --git-dir | Out-Null
+    Assert-LastExitCode "local update source validation"
+    $InstallSource = $UpdateSourcePath
+}
 if (Test-Path -LiteralPath $GitDirectory -PathType Container) {
     $DirtyFiles = & $Git.Source -C $AppDirectory status --porcelain
     Assert-LastExitCode "Git status check"
     if ($DirtyFiles) {
         throw "$AppDirectory contains local changes. Save them before updating."
     }
-    & $Git.Source -C $AppDirectory fetch origin
+    & $Git.Source -C $AppDirectory fetch $InstallSource $Revision
     Assert-LastExitCode "git fetch"
     & $Git.Source -C $AppDirectory checkout $Revision
     Assert-LastExitCode "git checkout"
-    & $Git.Source -C $AppDirectory pull --ff-only origin $Revision
-    Assert-LastExitCode "git pull"
+    & $Git.Source -C $AppDirectory merge --ff-only FETCH_HEAD
+    Assert-LastExitCode "git fast-forward"
 }
 else {
     if (Test-Path -LiteralPath $AppDirectory) {
@@ -136,15 +152,21 @@ else {
         }
     }
 
-    $GitHub = Get-Command "gh.exe" -ErrorAction SilentlyContinue
-    if ($null -ne $GitHub) {
-        & $GitHub.Source repo clone $Repository $AppDirectory
-        Assert-LastExitCode "gh repo clone. Check gh auth status or the GH_TOKEN environment variable"
+    if (-not [string]::IsNullOrWhiteSpace($UpdateSourcePath)) {
+        & $Git.Source clone $UpdateSourcePath $AppDirectory
+        Assert-LastExitCode "git clone from the local update source"
     }
     else {
-        $RepositoryUrl = "https://github.com/$Repository.git"
-        & $Git.Source clone $RepositoryUrl $AppDirectory
-        Assert-LastExitCode "git clone. Configure Git Credential Manager first when using a private repository"
+        $GitHub = Get-Command "gh.exe" -ErrorAction SilentlyContinue
+        if ($null -ne $GitHub) {
+            & $GitHub.Source repo clone $Repository $AppDirectory
+            Assert-LastExitCode "gh repo clone. Check gh auth status or the GH_TOKEN environment variable"
+        }
+        else {
+            $RepositoryUrl = "https://github.com/$Repository.git"
+            & $Git.Source clone $RepositoryUrl $AppDirectory
+            Assert-LastExitCode "git clone. Configure Git Credential Manager first when using a private repository"
+        }
     }
     & $Git.Source -C $AppDirectory checkout $Revision
     Assert-LastExitCode "git checkout"
@@ -163,16 +185,24 @@ Assert-LastExitCode "pip upgrade"
 & $VenvPython -m pip install --upgrade $AppDirectory
 Assert-LastExitCode "1c-element-mcp installation"
 
-$InstalledVersion = & $McpExecutable --version
+$InstalledVersion = & $McpExecutable --version | Select-Object -Last 1
 Assert-LastExitCode "element-mcp version check"
 
 $QuotedExecutable = ConvertTo-PowerShellLiteral $McpExecutable
 $QuotedConfig = ConvertTo-PowerShellLiteral $ConfigPath
 $QuotedData = ConvertTo-PowerShellLiteral $DataDirectory
 $QuotedLog = ConvertTo-PowerShellLiteral $LogPath
+$QuotedApp = ConvertTo-PowerShellLiteral $AppDirectory
+$QuotedRevision = ConvertTo-PowerShellLiteral $Revision
+$QuotedUpdaterTask = ConvertTo-PowerShellLiteral $UpdaterTaskName
+$UpdateSourceRunnerArgument = ""
+if (-not [string]::IsNullOrWhiteSpace($UpdateSourcePath)) {
+    $QuotedUpdateSource = ConvertTo-PowerShellLiteral $UpdateSourcePath
+    $UpdateSourceRunnerArgument = " --update-source-path $QuotedUpdateSource"
+}
 $RunnerContent = @"
 `$ErrorActionPreference = 'Stop'
-& $QuotedExecutable --transport streamable-http --host 127.0.0.1 --port $Port --config-path $QuotedConfig --data-path $QuotedData *>> $QuotedLog
+& $QuotedExecutable --transport streamable-http --host 127.0.0.1 --port $Port --config-path $QuotedConfig --data-path $QuotedData --update-repository-path $QuotedApp --update-revision $QuotedRevision --update-task-name $QuotedUpdaterTask$UpdateSourceRunnerArgument *>> $QuotedLog
 "@
 $RunnerContent | Set-Content -LiteralPath $RunnerPath -Encoding UTF8
 
@@ -193,16 +223,38 @@ if ($RegisterStartupTask) {
         -StartWhenAvailable
     Register-ScheduledTask `
         -TaskName $TaskName `
-        -Description "1C Element MCP 0.2.x on loopback port $Port" `
+        -Description "1C Element MCP on loopback port $Port" `
         -Action $Action `
         -Trigger $Trigger `
         -Principal $Principal `
         -Settings $Settings `
         -Force | Out-Null
-    Start-ScheduledTask -TaskName $TaskName
-    Start-Sleep -Seconds 3
 
-    $Listener = Get-NetTCPConnection -State Listen -LocalAddress "127.0.0.1" -LocalPort $Port -ErrorAction SilentlyContinue
+    $UpdaterArguments = "-m element_mcp.updater --repository-path `"$AppDirectory`" --revision `"$Revision`" --server-task-name `"$TaskName`" --status-path `"$UpdateStatusPath`""
+    if (-not [string]::IsNullOrWhiteSpace($UpdateSourcePath)) {
+        $UpdaterArguments += " --source-path `"$UpdateSourcePath`""
+    }
+    $UpdaterAction = New-ScheduledTaskAction -Execute $VenvPython -Argument $UpdaterArguments
+    $UpdaterSettings = New-ScheduledTaskSettingsSet `
+        -AllowStartIfOnBatteries `
+        -DontStopIfGoingOnBatteries `
+        -ExecutionTimeLimit (New-TimeSpan -Minutes 15) `
+        -MultipleInstances IgnoreNew `
+        -StartWhenAvailable
+    Register-ScheduledTask `
+        -TaskName $UpdaterTaskName `
+        -Description "Updates 1C Element MCP from Git and restarts the server task" `
+        -Action $UpdaterAction `
+        -Principal $Principal `
+        -Settings $UpdaterSettings `
+        -Force | Out-Null
+
+    Start-ScheduledTask -TaskName $TaskName
+    $Listener = $null
+    for ($Attempt = 0; $Attempt -lt 15 -and $null -eq $Listener; $Attempt++) {
+        Start-Sleep -Seconds 1
+        $Listener = Get-NetTCPConnection -State Listen -LocalAddress "127.0.0.1" -LocalPort $Port -ErrorAction SilentlyContinue
+    }
     if ($null -eq $Listener) {
         Write-Warning "The task is registered, but port $Port is not listening yet. Check the log: $LogPath"
     }
@@ -217,6 +269,7 @@ Write-Host "Data:         $DataDirectory"
 Write-Host "Log:          $LogPath"
 if ($RegisterStartupTask) {
     Write-Host "Task:         $TaskName (SYSTEM, AtStartup)"
+    Write-Host "Updater task: $UpdaterTaskName (SYSTEM, OnDemand)"
 }
 else {
     Write-Host "Run manually with: powershell.exe -ExecutionPolicy Bypass -File `"$RunnerPath`""

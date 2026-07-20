@@ -21,6 +21,13 @@ def test_windows_installer_has_safe_server_defaults() -> None:
     assert "--host 127.0.0.1" in script
     assert 'New-ScheduledTaskPrincipal -UserId "SYSTEM"' in script
     assert "Register-ScheduledTask" in script
+    assert '$UpdaterTaskName = "1C Element MCP Updater"' in script
+    assert "-m element_mcp.updater" in script
+    assert "--update-repository-path" in script
+    assert "[string]$UpdateSourcePath" in script
+    assert "clone $UpdateSourcePath $AppDirectory" in script
+    assert "fetch $InstallSource $Revision" in script
+    assert "$Attempt -lt 15" in script
     assert "New-NetFirewallRule" not in script
     assert "0.0.0.0" not in script
     assert "GitHubToken" not in script
