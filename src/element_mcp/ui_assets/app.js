@@ -5,9 +5,15 @@ const title = document.querySelector("#update-title");
 const message = document.querySelector("#update-message");
 const action = document.querySelector("#update-action");
 const actionLabel = action.querySelector(".button-label");
+const sourceToggle = document.querySelector("#source-toggle");
+const sourceSettings = document.querySelector("#source-settings");
+const sourceInput = document.querySelector("#source-path");
+const sourceError = document.querySelector("#source-error");
+const sourceUseOrigin = document.querySelector("#source-use-origin");
 
 let latestStatus = null;
 let initialVersion = null;
+let sourceDirty = false;
 
 function sleep(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
@@ -35,12 +41,35 @@ function sourceText(value) {
   return value.label;
 }
 
+function showSourceError(value) {
+  sourceError.textContent = value;
+  sourceError.hidden = !value;
+  sourceInput.setAttribute("aria-invalid", value ? "true" : "false");
+}
+
+function setSourceEditor(updateSource) {
+  if (!sourceDirty) {
+    sourceInput.value = updateSource.kind === "local" ? updateSource.label : "";
+  }
+  sourceUseOrigin.hidden = updateSource.kind !== "local" && !sourceDirty;
+}
+
+function markSourceDirty() {
+  sourceDirty = true;
+  showSourceError("");
+  sourceUseOrigin.hidden = false;
+  actionLabel.textContent = "Проверить обновления";
+  action.disabled = false;
+  action.dataset.action = "check";
+}
+
 function render(payload) {
   latestStatus = payload;
   initialVersion ||= payload.server.version;
   version.textContent = payload.server.version;
   source.textContent = sourceText(payload.updates.source);
   source.title = payload.updates.source.label;
+  setSourceEditor(payload.updates.source);
 
   const applyState = payload.updates.apply?.state;
   if (["queued", "checking", "applying"].includes(applyState)) {
@@ -81,15 +110,45 @@ function render(payload) {
   }
 }
 
-async function checkUpdates() {
+async function saveSourceIfNeeded() {
+  if (!sourceDirty) return;
+
+  showSourceError("");
+  try {
+    const path = sourceInput.value.trim() || null;
+    const payload = await api("/api/updates/source", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    sourceDirty = false;
+    render(payload);
+  } catch (error) {
+    showSourceError(error.message);
+    sourceInput.focus();
+    throw error;
+  }
+}
+
+async function checkUpdates(applyLocalUpdate = false) {
   action.disabled = true;
   actionLabel.textContent = "Проверяем…";
   title.textContent = "Проверяем обновления";
   message.textContent = "Это может занять несколько секунд.";
   try {
-    render(await api("/api/updates/check", { method: "POST" }));
+    await saveSourceIfNeeded();
+    const payload = await api("/api/updates/check", { method: "POST" });
+    render(payload);
+    if (
+      applyLocalUpdate &&
+      payload.updates.source.kind === "local" &&
+      payload.updates.state === "available" &&
+      payload.updates.can_apply
+    ) {
+      await applyUpdate();
+    }
   } catch (error) {
-    title.textContent = "Проверка недоступна";
+    title.textContent = sourceError.hidden ? "Проверка недоступна" : "Проверьте каталог";
     message.textContent = error.message;
     action.disabled = false;
     actionLabel.textContent = "Проверить обновления";
@@ -135,13 +194,34 @@ async function applyUpdate() {
 
 action.addEventListener("click", () => {
   if (action.dataset.action === "apply") applyUpdate();
-  else checkUpdates();
+  else checkUpdates(true);
+});
+
+sourceToggle.addEventListener("click", () => {
+  const open = sourceSettings.hidden;
+  sourceSettings.hidden = !open;
+  sourceToggle.setAttribute("aria-expanded", String(open));
+  sourceToggle.textContent = open ? "Скрыть" : "Изменить";
+  if (open) sourceInput.focus();
+});
+
+sourceInput.addEventListener("input", markSourceDirty);
+
+sourceUseOrigin.addEventListener("click", () => {
+  sourceInput.value = "";
+  markSourceDirty();
+  sourceInput.focus();
+});
+
+sourceSettings.addEventListener("submit", (event) => {
+  event.preventDefault();
+  checkUpdates(true);
 });
 
 api("/api/status")
   .then((payload) => {
     render(payload);
-    return checkUpdates();
+    return checkUpdates(false);
   })
   .catch((error) => {
     title.textContent = "Не удалось получить состояние";

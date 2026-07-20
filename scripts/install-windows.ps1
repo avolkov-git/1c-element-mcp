@@ -231,7 +231,7 @@ if ($RegisterStartupTask) {
         -Settings $Settings `
         -Force | Out-Null
 
-    $UpdaterArguments = "-m element_mcp.updater --repository-path `"$AppDirectory`" --revision `"$Revision`" --server-task-name `"$TaskName`" --status-path `"$UpdateStatusPath`""
+    $UpdaterArguments = "-m element_mcp.updater --repository-path `"$AppDirectory`" --config-path `"$ConfigPath`" --revision `"$Revision`" --server-task-name `"$TaskName`" --status-path `"$UpdateStatusPath`""
     if (-not [string]::IsNullOrWhiteSpace($UpdateSourcePath)) {
         $UpdaterArguments += " --source-path `"$UpdateSourcePath`""
     }

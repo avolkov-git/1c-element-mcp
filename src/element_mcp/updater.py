@@ -9,6 +9,7 @@ from pathlib import Path
 
 from packaging.version import Version
 
+from element_mcp.config import ConfigurationError, ConfigurationStore, discover_update_source_path
 from element_mcp.updates import GitRepository, UpdateError, utc_now, write_json_atomic
 
 
@@ -16,6 +17,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Apply a prepared 1C Element MCP update")
     parser.add_argument("--repository-path", type=Path, required=True)
     parser.add_argument("--source-path", type=Path, default=None)
+    parser.add_argument("--config-path", type=Path, required=True)
     parser.add_argument("--revision", default="master")
     parser.add_argument("--server-task-name", required=True)
     parser.add_argument("--status-path", type=Path, required=True)
@@ -127,9 +129,24 @@ def perform_update(
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    try:
+        source_path = discover_update_source_path(
+            args.source_path,
+            config_store=ConfigurationStore(args.config_path),
+        )
+    except ConfigurationError as error:
+        write_json_atomic(
+            args.status_path.expanduser().resolve(),
+            {
+                "state": "error",
+                "message": f"Обновление не выполнено: {error}",
+                "updated_at": utc_now(),
+            },
+        )
+        return 1
     result = perform_update(
         repository_path=args.repository_path.expanduser().resolve(),
-        source_path=args.source_path.expanduser().resolve() if args.source_path else None,
+        source_path=source_path,
         revision=args.revision,
         server_task_name=args.server_task_name,
         status_path=args.status_path.expanduser().resolve(),

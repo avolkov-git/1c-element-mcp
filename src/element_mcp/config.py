@@ -4,7 +4,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from platformdirs import user_config_path, user_data_path
 
@@ -43,6 +43,30 @@ class ConfigurationStore:
         configured = self.read().get("active_corpus_path")
         return Path(configured).expanduser().resolve() if configured else None
 
+    def update_source(self) -> UpdateSourceConfiguration | None:
+        configured = self.read().get("update_source")
+        if configured is None:
+            return None
+        if not isinstance(configured, dict) or configured.get("kind") not in {"local", "remote"}:
+            raise ConfigurationError(f"Некорректный источник обновлений в {self.path}")
+        kind = configured["kind"]
+        path = configured.get("path")
+        if kind == "local":
+            if not isinstance(path, str) or not path.strip():
+                raise ConfigurationError(f"Для локального источника не указан путь в {self.path}")
+            return UpdateSourceConfiguration(kind="local", path=Path(path).expanduser().resolve())
+        return UpdateSourceConfiguration(kind="remote", path=None)
+
+    def configure_update_source(self, path: str | Path | None) -> None:
+        value = self.read()
+        value["schema_version"] = CONFIG_SCHEMA_VERSION
+        value["update_source"] = (
+            {"kind": "local", "path": str(Path(path).expanduser().resolve())}
+            if path is not None
+            else {"kind": "remote"}
+        )
+        self._write(value)
+
     def activate(self, corpus_path: str | Path, *, metadata: dict[str, Any] | None = None) -> None:
         value = self.read()
         value.update(
@@ -53,6 +77,9 @@ class ConfigurationStore:
         )
         if metadata:
             value["active_corpus"] = metadata
+        self._write(value)
+
+    def _write(self, value: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(self.path.suffix + ".tmp")
         temporary.write_text(
@@ -60,6 +87,23 @@ class ConfigurationStore:
             encoding="utf-8",
         )
         temporary.replace(self.path)
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateSourceConfiguration:
+    kind: Literal["local", "remote"]
+    path: Path | None
+
+
+def discover_update_source_path(
+    explicit: str | Path | None = None,
+    *,
+    config_store: ConfigurationStore | None = None,
+) -> Path | None:
+    stored = (config_store or ConfigurationStore()).update_source()
+    if stored is not None:
+        return stored.path
+    return Path(explicit).expanduser().resolve() if explicit else None
 
 
 def discover_corpus_path(

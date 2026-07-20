@@ -9,6 +9,7 @@
   --primary-hover: oklch(0.51 0.15 36);
   --primary-ink: oklch(1 0 0);
   --success: oklch(0.63 0.17 145);
+  --danger: oklch(0.5 0.19 28);
   --focus: oklch(0.62 0.18 250);
   --radius: 16px;
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
@@ -59,6 +60,7 @@ select {
 .header,
 .runtime-status,
 .metadata,
+.source-settings,
 .update-area {
   padding-inline: clamp(24px, 6vw, 40px);
 }
@@ -152,6 +154,97 @@ h1 {
   font-variant-numeric: tabular-nums;
 }
 
+.source-value {
+  display: flex;
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.text-action,
+.secondary-action {
+  min-height: 44px;
+  touch-action: manipulation;
+  cursor: pointer;
+  color: var(--primary);
+  font-family: inherit;
+  font-weight: 600;
+}
+
+.text-action {
+  margin: -8px -10px -10px 0;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  font-size: 0.875rem;
+}
+
+.text-action:hover,
+.secondary-action:hover {
+  color: var(--primary-hover);
+}
+
+.source-settings {
+  padding-block: 24px;
+  border-top: 1px solid var(--border);
+}
+
+.source-settings label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 650;
+}
+
+.source-settings input {
+  width: 100%;
+  min-height: 48px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--ink);
+  background: var(--surface);
+  font-family: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.875rem;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.source-settings input::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+.source-settings input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.source-help,
+.source-error {
+  margin-top: 8px;
+  font-size: 0.875rem;
+  text-wrap: pretty;
+}
+
+.source-help {
+  color: var(--muted);
+}
+
+.source-help code {
+  color: inherit;
+  font-family: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+}
+
+.source-error {
+  color: var(--danger);
+}
+
+.secondary-action {
+  margin: 12px 0 -8px -10px;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  font-size: 0.875rem;
+}
+
 .update-area {
   padding-block: 24px 32px;
   border-top: 1px solid var(--border);
@@ -190,6 +283,17 @@ h1 {
   outline-offset: 3px;
 }
 
+.text-action:focus-visible,
+.secondary-action:focus-visible,
+.source-settings input:focus-visible {
+  outline: 3px solid color-mix(in oklch, var(--focus), transparent 35%);
+  outline-offset: 2px;
+}
+
+.source-settings input:focus-visible {
+  border-color: var(--focus);
+}
+
 #update-action:active:not(:disabled) {
   transform: scale(0.98);
 }
@@ -219,6 +323,7 @@ h1 {
   .header,
   .runtime-status,
   .metadata,
+  .source-settings,
   .update-area {
     padding-inline: 22px;
   }
@@ -230,6 +335,14 @@ h1 {
   .metadata dd {
     margin-top: 4px;
     text-align: left;
+  }
+
+  .source-value {
+    align-items: flex-start;
+  }
+
+  .text-action {
+    margin-left: -10px;
   }
 }
 
@@ -244,6 +357,7 @@ h1 {
     --primary-hover: oklch(0.7 0.14 36);
     --primary-ink: oklch(0.12 0.01 36);
     --success: oklch(0.72 0.16 145);
+    --danger: oklch(0.72 0.16 28);
     --focus: oklch(0.75 0.15 250);
   }
 }

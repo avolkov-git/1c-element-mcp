@@ -23,6 +23,7 @@ def test_windows_installer_has_safe_server_defaults() -> None:
     assert "Register-ScheduledTask" in script
     assert '$UpdaterTaskName = "1C Element MCP Updater"' in script
     assert "-m element_mcp.updater" in script
+    assert '--config-path `"$ConfigPath`"' in script
     assert "--update-repository-path" in script
     assert "[string]$UpdateSourcePath" in script
     assert "clone $UpdateSourcePath $AppDirectory" in script

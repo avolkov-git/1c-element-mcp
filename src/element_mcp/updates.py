@@ -16,7 +16,7 @@ from urllib.parse import urlsplit, urlunsplit
 from packaging.version import InvalidVersion, Version
 
 from element_mcp import __version__
-from element_mcp.config import ServerSettings
+from element_mcp.config import ConfigurationError, ConfigurationStore, ServerSettings, discover_update_source_path
 
 
 class UpdateError(RuntimeError):
@@ -103,7 +103,10 @@ class GitRepository:
     def version_at(self, commit: str) -> str:
         payload = self.run("show", f"{commit}:pyproject.toml")
         try:
-            version = str(tomllib.loads(payload)["project"]["version"])
+            project = tomllib.loads(payload)["project"]
+            if project["name"] != "1c-element-mcp":
+                raise KeyError("project.name")
+            version = str(project["version"])
             Version(version)
         except (KeyError, TypeError, tomllib.TOMLDecodeError, InvalidVersion) as error:
             raise UpdateError("В выбранной ревизии не найдена корректная версия MCP") from error
@@ -138,7 +141,8 @@ class UpdateService:
     def __init__(self, settings: ServerSettings) -> None:
         self.settings = settings
         self.repository_path = settings.resolved_update_repository_path
-        self.source_path = settings.resolved_update_source_path
+        self.default_source_path = settings.resolved_update_source_path
+        self.configuration = ConfigurationStore(settings.resolved_config_path)
         self.status_path = settings.resolved_data_path / "update-status.json"
         self.csrf_token = secrets.token_urlsafe(32)
         self._lock = threading.Lock()
@@ -150,9 +154,52 @@ class UpdateService:
             "candidate_commit": None,
         }
 
+    def current_source_path(self) -> Path | None:
+        try:
+            return discover_update_source_path(self.default_source_path, config_store=self.configuration)
+        except ConfigurationError as error:
+            raise UpdateError(str(error)) from error
+
+    def configure_source(self, value: str | None) -> dict[str, Any]:
+        if value is not None:
+            value = value.strip()
+            if not value:
+                value = None
+        if value is not None and len(value) > 4096:
+            raise UpdateError("Путь к локальному Git-каталогу слишком длинный")
+
+        with self._lock:
+            source_path: Path | None = None
+            if value is not None:
+                candidate = Path(value).expanduser()
+                if not candidate.is_absolute():
+                    raise UpdateError("Укажите полный путь к локальному Git-каталогу")
+                source = GitRepository(candidate)
+                source.validate()
+                commit = source.run("rev-parse", "--verify", f"{self.settings.update_revision}^{{commit}}")
+                source.version_at(commit)
+                source_path = source.path
+
+            try:
+                self.configuration.configure_update_source(source_path)
+            except (ConfigurationError, OSError) as error:
+                raise UpdateError(f"Не удалось сохранить источник обновлений: {error}") from error
+            self._check = {
+                "state": "idle",
+                "message": "Источник обновлений сохранён",
+                "checked_at": None,
+                "available_version": None,
+                "candidate_commit": None,
+            }
+        return self.status()
+
     def source(self) -> dict[str, Any]:
-        if self.source_path is not None:
-            return {"kind": "local", "label": str(self.source_path), "revision": self.settings.update_revision}
+        try:
+            source_path = self.current_source_path()
+        except UpdateError as error:
+            return {"kind": "invalid", "label": str(error), "revision": self.settings.update_revision}
+        if source_path is not None:
+            return {"kind": "local", "label": str(source_path), "revision": self.settings.update_revision}
         if self.repository_path is None:
             return {"kind": "none", "label": "Источник обновлений не настроен", "revision": None}
         try:
@@ -189,7 +236,7 @@ class UpdateService:
                 raise UpdateError("Каталог установленного MCP не настроен для обновлений")
             candidate = GitRepository(self.repository_path).fetch_candidate(
                 self.settings.update_revision,
-                self.source_path,
+                self.current_source_path(),
             )
             current = Version(__version__)
             available = Version(candidate.version)

@@ -23,7 +23,7 @@ def test_stdio_server_exposes_read_only_tools(corpus_path: Path) -> None:
             ClientSession(read_stream, write_stream) as session,
         ):
             initialized = await session.initialize()
-            assert initialized.serverInfo.version == "0.3.1"
+            assert initialized.serverInfo.version == "0.4.0"
             tools = await session.list_tools()
             names = {tool.name for tool in tools.tools}
             assert names == {

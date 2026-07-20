@@ -83,6 +83,28 @@ def register_ui(server, settings: ServerSettings, updates: UpdateService) -> Non
         result = await anyio.to_thread.run_sync(updates.check)
         return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
+    @server.custom_route("/api/updates/source", methods=["POST"], include_in_schema=False)
+    async def configure_update_source(request: Request) -> Response:
+        if not mutation_allowed(request):
+            return JSONResponse({"message": "Недопустимый локальный запрос"}, status_code=403)
+        try:
+            content_length = int(request.headers.get("content-length", "0") or 0)
+        except ValueError:
+            return JSONResponse({"message": "Некорректная длина запроса"}, status_code=400)
+        if content_length > 8192:
+            return JSONResponse({"message": "Запрос слишком большой"}, status_code=413)
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"message": "Некорректные параметры источника обновлений"}, status_code=400)
+        if not isinstance(payload, dict) or not isinstance(payload.get("path"), (str, type(None))):
+            return JSONResponse({"message": "Путь должен быть строкой или null"}, status_code=400)
+        try:
+            result = await anyio.to_thread.run_sync(updates.configure_source, payload["path"])
+        except UpdateError as error:
+            return JSONResponse({"message": str(error)}, status_code=400)
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
     @server.custom_route("/api/updates/apply", methods=["POST"], include_in_schema=False)
     async def apply_update(request: Request) -> Response:
         if not mutation_allowed(request):

@@ -32,9 +32,41 @@
           </div>
           <div class="metadata-row">
             <dt>Источник обновлений</dt>
-            <dd id="update-source">—</dd>
+            <dd class="source-value">
+              <span id="update-source">—</span>
+              <button
+                id="source-toggle"
+                class="text-action"
+                type="button"
+                aria-expanded="false"
+                aria-controls="source-settings"
+              >Изменить</button>
+            </dd>
           </div>
         </dl>
+
+        <form id="source-settings" class="source-settings" hidden novalidate>
+          <label for="source-path">Путь к локальному Git-каталогу</label>
+          <input
+            id="source-path"
+            name="source-path"
+            type="text"
+            maxlength="4096"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="C:\Users\cibot\Desktop\1c-element-mcp"
+            aria-describedby="source-help source-error"
+          >
+          <p id="source-help" class="source-help">
+            MCP читает ветку <code>master</code> из этого каталога. После изменения нажмите
+            «Проверить обновления» — путь сохранится, а новая версия установится автоматически.
+            Выбирайте только доверенный клон репозитория MCP.
+          </p>
+          <p id="source-error" class="source-error" role="alert" hidden></p>
+          <button id="source-use-origin" class="secondary-action" type="button">
+            Использовать удалённый origin
+          </button>
+        </form>
 
         <div class="update-area">
           <div class="update-copy" aria-live="polite" aria-atomic="true">
