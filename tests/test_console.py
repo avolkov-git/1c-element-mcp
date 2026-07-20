@@ -346,14 +346,10 @@ def test_rejected_ide_session_does_not_replace_existing_connection(tmp_path: Pat
         ServerSettings(config_path=tmp_path / "config.json"),
         client=ConsoleHttpClient(requester=requester),
     )
-    service.configure_ide_session(
-        {"server": "https://good.example/console", "access_token": "good-token"}
-    )
+    service.configure_ide_session({"server": "https://good.example/console", "access_token": "good-token"})
 
     with pytest.raises(ConsoleRequestError):
-        service.configure_ide_session(
-            {"server": "https://bad.example/console", "access_token": "bad-token"}
-        )
+        service.configure_ide_session({"server": "https://bad.example/console", "access_token": "bad-token"})
 
     assert service.status()["connection"]["base_url"] == "https://good.example/console"
 
