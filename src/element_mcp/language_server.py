@@ -110,9 +110,7 @@ def inspect_language_server_runtime(bundle_path: Path, java_path: Path | None, *
         installation = require_element_installation(bundle_path)
     except ValueError as error:
         raise LanguageServerUnavailable(str(error)) from error
-    plugin_bin = (
-        installation.path / "ide" / "theia" / "plugins" / "@1c-appengine-plugin" / "bin"
-    )
+    plugin_bin = installation.path / "ide" / "theia" / "plugins" / "@1c-appengine-plugin" / "bin"
     classpath = plugin_bin / "appengine-lsp" / "repo"
     jars = sorted(classpath.glob(LSP_JAR_PATTERN)) if classpath.is_dir() else []
     if not jars:
@@ -448,9 +446,7 @@ class LanguageServerService:
         result = {
             "status": "ready",
             "message": (
-                "Language Server Element готов"
-                if client
-                else "Language Server настроен и будет запущен по требованию"
+                "Language Server Element готов" if client else "Language Server настроен и будет запущен по требованию"
             ),
             "project_path": str(root),
             "process": "running" if client else "stopped",
@@ -816,9 +812,7 @@ class LanguageServerService:
 
     @staticmethod
     def _language_id(path: Path) -> str:
-        return {".xbsl": "xbsl", ".xbql": "xbql", ".yaml": "yaml", ".yml": "yaml"}.get(
-            path.suffix.lower(), "plaintext"
-        )
+        return {".xbsl": "xbsl", ".xbql": "xbql", ".yaml": "yaml", ".yml": "yaml"}.get(path.suffix.lower(), "plaintext")
 
     @staticmethod
     def _runtime_public(runtime: LanguageServerRuntime) -> dict[str, Any]:

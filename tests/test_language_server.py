@@ -33,7 +33,7 @@ def make_bundle(root: Path) -> Path:
 
 def make_java(root: Path) -> Path:
     java = root / "java"
-    java.write_text('#!/bin/sh\necho \'openjdk version "17.0.1"\' >&2\n', encoding="utf-8")
+    java.write_text("#!/bin/sh\necho 'openjdk version \"17.0.1\"' >&2\n", encoding="utf-8")
     java.chmod(0o755)
     return java
 
