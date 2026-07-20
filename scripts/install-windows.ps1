@@ -201,8 +201,9 @@ if (-not [string]::IsNullOrWhiteSpace($UpdateSourcePath)) {
     $UpdateSourceRunnerArgument = " --update-source-path $QuotedUpdateSource"
 }
 $RunnerContent = @"
-`$ErrorActionPreference = 'Stop'
+`$ErrorActionPreference = 'Continue'
 & $QuotedExecutable --transport streamable-http --host 127.0.0.1 --port $Port --config-path $QuotedConfig --data-path $QuotedData --update-repository-path $QuotedApp --update-revision $QuotedRevision --update-task-name $QuotedUpdaterTask$UpdateSourceRunnerArgument *>> $QuotedLog
+exit `$LASTEXITCODE
 "@
 $RunnerContent | Set-Content -LiteralPath $RunnerPath -Encoding UTF8
 

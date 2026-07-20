@@ -2,6 +2,11 @@
 
 Проект следует [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] - 2026-07-20
+
+- Исправлен запуск MCP через Windows Task Scheduler: штатный вывод Uvicorn в stderr больше не завершает `run-server.ps1` в Windows PowerShell 5.1.
+- Сценарий запуска возвращает Task Scheduler настоящий код завершения процесса MCP.
+
 ## [0.3.0] - 2026-07-20
 
 - Добавлен локальный UI состояния MCP по корневому адресу HTTP-сервера.

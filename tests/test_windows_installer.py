@@ -27,6 +27,9 @@ def test_windows_installer_has_safe_server_defaults() -> None:
     assert "[string]$UpdateSourcePath" in script
     assert "clone $UpdateSourcePath $AppDirectory" in script
     assert "fetch $InstallSource $Revision" in script
+    assert "`$ErrorActionPreference = 'Continue'" in script
+    assert "exit `$LASTEXITCODE" in script
+    assert "`$ErrorActionPreference = 'Stop'" not in script
     assert "$Attempt -lt 15" in script
     assert "New-NetFirewallRule" not in script
     assert "0.0.0.0" not in script
