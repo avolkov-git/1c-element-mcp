@@ -47,6 +47,20 @@ class ConfigurationStore:
         configured = self.read().get("active_project_path")
         return Path(configured).expanduser().resolve() if configured else None
 
+    def language_server_configuration(self) -> dict[str, Path | None]:
+        configured = self.read().get("language_server")
+        if configured is None:
+            return {"bundle_path": None, "java_path": None}
+        if not isinstance(configured, dict):
+            raise ConfigurationError(f"Некорректная конфигурация Language Server в {self.path}")
+        result: dict[str, Path | None] = {}
+        for key in ("bundle_path", "java_path"):
+            value = configured.get(key)
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ConfigurationError(f"Некорректное поле language_server.{key} в {self.path}")
+            result[key] = Path(value).expanduser().resolve() if value else None
+        return result
+
     def update_source(self) -> UpdateSourceConfiguration | None:
         configured = self.read().get("update_source")
         if configured is None:
@@ -93,6 +107,15 @@ class ConfigurationStore:
         )
         if metadata:
             value["active_project"] = metadata
+        self._write(value)
+
+    def configure_language_server(self, bundle_path: str | Path, *, java_path: str | Path | None = None) -> None:
+        value = self.read()
+        value["schema_version"] = CONFIG_SCHEMA_VERSION
+        value["language_server"] = {
+            "bundle_path": str(Path(bundle_path).expanduser().resolve()),
+            "java_path": str(Path(java_path).expanduser().resolve()) if java_path else None,
+        }
         self._write(value)
 
     def _write(self, value: dict[str, Any]) -> None:
@@ -160,6 +183,8 @@ def discover_project_path(
 class ServerSettings:
     corpus_path: Path | None = None
     project_path: Path | None = None
+    element_bundle_path: Path | None = None
+    java_path: Path | None = None
     console_config_path: Path | None = None
     ide_settings_path: Path | None = None
     config_path: Path | None = None
@@ -183,6 +208,14 @@ class ServerSettings:
     @property
     def resolved_project_path(self) -> Path | None:
         return self.project_path.expanduser().resolve() if self.project_path else None
+
+    @property
+    def resolved_element_bundle_path(self) -> Path | None:
+        return self.element_bundle_path.expanduser().resolve() if self.element_bundle_path else None
+
+    @property
+    def resolved_java_path(self) -> Path | None:
+        return self.java_path.expanduser().resolve() if self.java_path else None
 
     @property
     def resolved_console_config_path(self) -> Path:

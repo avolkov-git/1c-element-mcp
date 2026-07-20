@@ -9,7 +9,11 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 
-def test_stdio_server_exposes_read_only_tools(corpus_path: Path, element_project_path: Path) -> None:
+def test_stdio_server_exposes_read_only_tools(
+    tmp_path: Path,
+    corpus_path: Path,
+    element_project_path: Path,
+) -> None:
     async def exercise_server() -> None:
         environment = dict(os.environ)
         for key in list(environment):
@@ -17,6 +21,8 @@ def test_stdio_server_exposes_read_only_tools(corpus_path: Path, element_project
                 environment.pop(key)
         environment["ELEMENT_DOCS_PATH"] = str(corpus_path)
         environment["ELEMENT_PROJECT_PATH"] = str(element_project_path)
+        environment["ELEMENT_MCP_CONFIG_PATH"] = str(tmp_path / "config.json")
+        environment["ELEMENT_MCP_DATA_PATH"] = str(tmp_path / "data")
         parameters = StdioServerParameters(
             command=sys.executable,
             args=["-m", "element_mcp", "--transport", "stdio"],
@@ -28,7 +34,7 @@ def test_stdio_server_exposes_read_only_tools(corpus_path: Path, element_project
         ):
             initialized = await session.initialize()
             assert initialized.serverInfo.name == "1C Element"
-            assert initialized.serverInfo.version == "0.9.0"
+            assert initialized.serverInfo.version == "0.10.0"
             assert initialized.instructions is not None
             assert "first call\nget_documentation_status" in initialized.instructions
             assert "Never call start_documentation_build without that consent" in initialized.instructions
@@ -42,12 +48,15 @@ def test_stdio_server_exposes_read_only_tools(corpus_path: Path, element_project
             assert "first call get_console_status" in initialized.instructions
             assert "Never ask the user to paste Client-Secret" in initialized.instructions
             assert "Use lookup_symbol for declarations" in initialized.instructions
+            assert "first call get_language_server_status" in initialized.instructions
+            assert "If exact tools report a lexical fallback" in initialized.instructions
             tools = await session.list_tools()
             names = {tool.name for tool in tools.tools}
             assert names == {
                 "activate_documentation",
                 "cancel_documentation_build",
                 "connect_project",
+                "configure_language_server",
                 "discover_element_installations",
                 "get_corpus_info",
                 "get_console_project",
@@ -55,8 +64,12 @@ def test_stdio_server_exposes_read_only_tools(corpus_path: Path, element_project
                 "get_document",
                 "get_documentation_build_status",
                 "get_documentation_status",
+                "get_definition",
+                "get_language_server_status",
                 "get_project_overview",
                 "get_project_status",
+                "get_project_diagnostics",
+                "get_references",
                 "get_related_docs",
                 "lookup_symbol",
                 "find_references",
@@ -76,8 +89,12 @@ def test_stdio_server_exposes_read_only_tools(corpus_path: Path, element_project
                 "get_document",
                 "get_documentation_build_status",
                 "get_documentation_status",
+                "get_definition",
+                "get_language_server_status",
                 "get_project_overview",
                 "get_project_status",
+                "get_project_diagnostics",
+                "get_references",
                 "get_related_docs",
                 "lookup_symbol",
                 "find_references",
@@ -101,6 +118,9 @@ def test_stdio_server_exposes_read_only_tools(corpus_path: Path, element_project
             assert "current IDE project" in (descriptions["list_space_projects"] or "")
             assert "lexical ambiguity" in (descriptions["lookup_symbol"] or "")
             assert "compiler-level" in (descriptions["find_references"] or "")
+            assert "Element LSP" in (descriptions["get_definition"] or "")
+            assert "Element LSP" in (descriptions["get_references"] or "")
+            assert "published by Element LSP" in (descriptions["get_project_diagnostics"] or "")
 
             result = await session.call_tool("search_docs", {"query": "ВебМетод", "corpus": "lang"})
             assert result.isError is False
@@ -116,6 +136,15 @@ def test_stdio_server_exposes_read_only_tools(corpus_path: Path, element_project
             assert symbols.isError is False
             assert symbols.structuredContent is not None
             assert symbols.structuredContent["resolution"] == "exact"
+
+            definition = await session.call_tool(
+                "get_definition",
+                {"relative_path": "Sales/Orders.xbsl", "line": 1, "column": 10},
+            )
+            assert definition.isError is False
+            assert definition.structuredContent is not None
+            assert definition.structuredContent["analysis_mode"] == "syntax-aware lexical fallback"
+            assert definition.structuredContent["semantic_guarantee"] is False
 
             related = await session.call_tool("get_related_docs", {"symbol": "FindOrder", "limit": 2})
             assert related.isError is False

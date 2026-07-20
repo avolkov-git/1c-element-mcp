@@ -27,6 +27,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path(value) if (value := os.environ.get("ELEMENT_PROJECT_PATH")) else None,
     )
     parser.add_argument(
+        "--element-bundle-path",
+        type=Path,
+        default=Path(value) if (value := os.environ.get("ELEMENT_BUNDLE_PATH")) else None,
+    )
+    parser.add_argument(
+        "--java-path",
+        type=Path,
+        default=Path(value) if (value := os.environ.get("ELEMENT_JAVA_PATH")) else None,
+    )
+    parser.add_argument(
         "--console-config-path",
         type=Path,
         default=Path(value) if (value := os.environ.get("ELEMENT_CONSOLE_CONFIG_PATH")) else None,
@@ -88,6 +98,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     settings = ServerSettings(
         corpus_path=args.corpus_path.expanduser().resolve() if args.corpus_path else None,
         project_path=args.project_path.expanduser().resolve() if args.project_path else None,
+        element_bundle_path=(args.element_bundle_path.expanduser().resolve() if args.element_bundle_path else None),
+        java_path=args.java_path.expanduser().resolve() if args.java_path else None,
         console_config_path=(args.console_config_path.expanduser().resolve() if args.console_config_path else None),
         ide_settings_path=args.ide_settings_path.expanduser().resolve() if args.ide_settings_path else None,
         config_path=args.config_path.expanduser().resolve() if args.config_path else None,

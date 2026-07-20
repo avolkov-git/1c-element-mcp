@@ -82,3 +82,16 @@ def test_console_config_defaults_next_to_main_config(tmp_path: Path) -> None:
     settings = ServerSettings(config_path=tmp_path / "config" / "config.json")
 
     assert settings.resolved_console_config_path == (tmp_path / "config" / "console.json").resolve()
+
+
+def test_language_server_configuration_shares_main_config(tmp_path: Path) -> None:
+    config = ConfigurationStore(tmp_path / "config.json")
+    bundle = tmp_path / "bundle"
+    java = tmp_path / "java"
+
+    config.configure_language_server(bundle, java_path=java)
+
+    assert config.language_server_configuration() == {
+        "bundle_path": bundle.resolve(),
+        "java_path": java.resolve(),
+    }

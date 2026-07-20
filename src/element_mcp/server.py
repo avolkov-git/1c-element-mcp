@@ -11,6 +11,7 @@ from element_mcp.config import ServerSettings
 from element_mcp.console import ConsoleService
 from element_mcp.documentation import DocumentationService
 from element_mcp.installation import discover_element_installations as find_element_installations
+from element_mcp.language_server import LanguageServerService
 from element_mcp.project import ProjectService
 from element_mcp.semantic import SemanticService
 from element_mcp.ui import register_ui
@@ -67,6 +68,15 @@ but lexical, not a compiler or Element Language Server: preserve ambiguity and n
 reference as proven symbol resolution. Use get_related_docs to turn a symbol or project file into a documentation
 query, then call get_document for the selected chunk.
 
+For compiler-level navigation and diagnostics, first call get_language_server_status. If it is ready, prefer
+get_definition, get_references, and get_project_diagnostics over lexical tools. These tools start the official
+Element Language Server lazily and keep one isolated process for the active project. Preserve analysis_mode,
+semantic_guarantee, source, and fallback_reason in the answer. If the Language Server is missing, call
+discover_element_installations and ask the user to choose a bundle when needed; call configure_language_server
+only with a user-confirmed bundle path. Never ask the user to paste a shell command as a Language Server command.
+If exact tools report a lexical fallback, say that the result is not compiler-proven. Lexical fallback cannot
+replace compiler diagnostics.
+
 For questions about projects available through the Element Management Console, first call get_console_status.
 The Console connection is optional and must come from the MCP process environment, a configured console file, or
 an explicitly selected Element/VS Code settings file. Never ask the user to paste Client-Secret or an access token
@@ -83,6 +93,7 @@ def create_server(settings: ServerSettings) -> FastMCP:
     documentation = DocumentationService(settings)
     project = ProjectService(settings)
     semantic = SemanticService(project, documentation)
+    language_server = LanguageServerService(settings, project, semantic)
     console = ConsoleService(settings)
     updates = UpdateService(settings)
     server = FastMCP(
@@ -187,6 +198,61 @@ def create_server(settings: ServerSettings) -> FastMCP:
     ) -> dict[str, Any]:
         """Read bounded lines from an Element source file by a relative path returned by project tools."""
         return project.read_file(relative_path, start_line=start_line, line_count=line_count)
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def get_language_server_status(start: bool = False) -> dict[str, Any]:
+        """Check the official Element Language Server runtime; optionally start its isolated project process."""
+        return {"server_version": __version__, **language_server.status(start=start)}
+
+    @server.tool(annotations=LOCAL_IDEMPOTENT_WRITE, structured_output=True)
+    def configure_language_server(
+        bundle_path: Annotated[str, Field(min_length=1, max_length=4096)],
+        java_path: Annotated[str | None, Field(max_length=4096)] = None,
+    ) -> dict[str, Any]:
+        """Validate and save a user-confirmed Element bundle and optional Java 11+ path for exact semantics."""
+        return {
+            "server_version": __version__,
+            **language_server.configure(bundle_path, java_path=java_path),
+        }
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def get_definition(
+        relative_path: Annotated[str, Field(min_length=1, max_length=4096)],
+        line: Annotated[int, Field(ge=1)],
+        column: Annotated[int, Field(ge=1)],
+    ) -> dict[str, Any]:
+        """Resolve a definition at a 1-based project position via Element LSP, with an explicit lexical fallback."""
+        return language_server.definition(relative_path, line, column)
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def get_references(
+        relative_path: Annotated[str, Field(min_length=1, max_length=4096)],
+        line: Annotated[int, Field(ge=1)],
+        column: Annotated[int, Field(ge=1)],
+        include_declaration: bool = True,
+        limit: Annotated[int, Field(ge=1, le=200)] = 100,
+    ) -> dict[str, Any]:
+        """Resolve references at a 1-based project position via Element LSP, with an explicit lexical fallback."""
+        return language_server.references(
+            relative_path,
+            line,
+            column,
+            include_declaration=include_declaration,
+            limit=limit,
+        )
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def get_project_diagnostics(
+        relative_path: Annotated[str | None, Field(max_length=4096)] = None,
+        wait_seconds: Annotated[float, Field(ge=0, le=10)] = 2.0,
+        limit: Annotated[int, Field(ge=1, le=500)] = 200,
+    ) -> dict[str, Any]:
+        """Return diagnostics published by Element LSP; scope to one relative file or the current project cache."""
+        return language_server.diagnostics(
+            relative_path=relative_path,
+            wait_seconds=wait_seconds,
+            limit=limit,
+        )
 
     @server.tool(annotations=READ_ONLY, structured_output=True)
     def lookup_symbol(
