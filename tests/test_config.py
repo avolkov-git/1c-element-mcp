@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from element_mcp.config import ConfigurationStore, discover_corpus_path, discover_update_source_path
+from element_mcp.config import (
+    ConfigurationStore,
+    discover_corpus_path,
+    discover_project_path,
+    discover_update_source_path,
+)
 
 
 def test_explicit_corpus_path_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -53,3 +58,20 @@ def test_update_source_and_active_corpus_share_configuration(tmp_path: Path) -> 
     assert config.active_corpus_path() == corpus.resolve()
     assert config.read()["active_corpus"] == {"version": "test"}
     assert config.update_source().path == source.resolve()  # type: ignore[union-attr]
+
+
+def test_persisted_project_path_is_used(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ELEMENT_PROJECT_PATH", raising=False)
+    config = ConfigurationStore(tmp_path / "config.json")
+    project = tmp_path / "project"
+    config.connect_project(project, metadata={"name": "Example"})
+
+    assert discover_project_path(config_store=config) == project.resolve()
+    assert config.read()["active_project"] == {"name": "Example"}
+
+
+def test_explicit_project_path_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    explicit = tmp_path / "explicit"
+    monkeypatch.setenv("ELEMENT_PROJECT_PATH", str(tmp_path / "environment"))
+
+    assert discover_project_path(explicit) == explicit.resolve()

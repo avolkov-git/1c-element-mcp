@@ -13,7 +13,7 @@ from element_mcp.server import create_server
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="MCP server for 1C:Enterprise.Element documentation")
+    parser = argparse.ArgumentParser(description="MCP server for 1C:Enterprise.Element documentation and projects")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument(
         "--transport",
@@ -21,6 +21,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.environ.get("ELEMENT_MCP_TRANSPORT", "stdio"),
     )
     parser.add_argument("--corpus-path", type=Path, default=None)
+    parser.add_argument(
+        "--project-path",
+        type=Path,
+        default=Path(value) if (value := os.environ.get("ELEMENT_PROJECT_PATH")) else None,
+    )
     parser.add_argument(
         "--config-path",
         type=Path,
@@ -72,6 +77,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     settings = ServerSettings(
         corpus_path=args.corpus_path.expanduser().resolve() if args.corpus_path else None,
+        project_path=args.project_path.expanduser().resolve() if args.project_path else None,
         config_path=args.config_path.expanduser().resolve() if args.config_path else None,
         data_path=args.data_path.expanduser().resolve() if args.data_path else None,
         transport=args.transport,

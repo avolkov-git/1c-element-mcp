@@ -43,6 +43,10 @@ class ConfigurationStore:
         configured = self.read().get("active_corpus_path")
         return Path(configured).expanduser().resolve() if configured else None
 
+    def active_project_path(self) -> Path | None:
+        configured = self.read().get("active_project_path")
+        return Path(configured).expanduser().resolve() if configured else None
+
     def update_source(self) -> UpdateSourceConfiguration | None:
         configured = self.read().get("update_source")
         if configured is None:
@@ -77,6 +81,18 @@ class ConfigurationStore:
         )
         if metadata:
             value["active_corpus"] = metadata
+        self._write(value)
+
+    def connect_project(self, project_path: str | Path, *, metadata: dict[str, Any] | None = None) -> None:
+        value = self.read()
+        value.update(
+            {
+                "schema_version": CONFIG_SCHEMA_VERSION,
+                "active_project_path": str(Path(project_path).expanduser().resolve()),
+            }
+        )
+        if metadata:
+            value["active_project"] = metadata
         self._write(value)
 
     def _write(self, value: dict[str, Any]) -> None:
@@ -125,9 +141,25 @@ def discover_corpus_path(
     return None
 
 
+def discover_project_path(
+    explicit: str | Path | None = None,
+    *,
+    config_store: ConfigurationStore | None = None,
+) -> Path | None:
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+
+    configured = os.environ.get("ELEMENT_PROJECT_PATH")
+    if configured:
+        return Path(configured).expanduser().resolve()
+
+    return (config_store or ConfigurationStore()).active_project_path()
+
+
 @dataclass(frozen=True, slots=True)
 class ServerSettings:
     corpus_path: Path | None = None
+    project_path: Path | None = None
     config_path: Path | None = None
     data_path: Path | None = None
     transport: str = "stdio"
@@ -145,6 +177,10 @@ class ServerSettings:
     @property
     def resolved_data_path(self) -> Path:
         return self.data_path.expanduser().resolve() if self.data_path else default_data_path()
+
+    @property
+    def resolved_project_path(self) -> Path | None:
+        return self.project_path.expanduser().resolve() if self.project_path else None
 
     @property
     def resolved_update_repository_path(self) -> Path | None:

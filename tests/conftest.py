@@ -172,3 +172,71 @@ def corpus_path(tmp_path: Path) -> Path:
         path.mkdir(parents=True)
         _create_index(path, corpus, chunks)
     return root
+
+
+@pytest.fixture
+def element_project_path(tmp_path: Path) -> Path:
+    root = tmp_path / "example-project"
+    sales = root / "Sales"
+    types = sales / "Types"
+    types.mkdir(parents=True)
+    (root / "Project.yaml").write_text(
+        "\n".join(
+            [
+                "Id: 11111111-1111-1111-1111-111111111111",
+                "Presentation: Example application",
+                "Vendor: ExampleVendor",
+                "Name: ExampleProject",
+                "Version: 1.2.3",
+                "DevelopmentLanguage: English",
+                "DefaultLanguage: Russian",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (root / "Project.xbsl").write_text(
+        'import Sales\n\n@ProjectUpdate(Id = "Update", Order = 1)\nmethod OnUpdate()\n;\n',
+        encoding="utf-8",
+    )
+    (root / "Project.xprj").write_bytes(b"PK\x03\x04test-project-archive")
+    (root / "gitflic-ci.yaml").write_text("job:\n  script: SECRET_VALUE\n", encoding="utf-8")
+    (sales / "Subsystem.yaml").write_text("Using:\n    - Types\n", encoding="utf-8")
+    (sales / "Orders.yaml").write_text(
+        "\n".join(
+            [
+                "ElementKind: CommonModule",
+                "Id: 22222222-2222-2222-2222-222222222222",
+                "Name: Orders",
+                "Environment: Server",
+                "VisibilityScope: InProject",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (sales / "Orders.xbsl").write_text(
+        "method FindOrder(Number: String): String\n    return Number\n;\n",
+        encoding="utf-8",
+    )
+    (sales / "OrdersQueries.xbql").write_text(
+        "Select Reference From Orders Where Number = &Number\n",
+        encoding="utf-8",
+    )
+    (types / "OrderDto.yaml").write_text(
+        "\n".join(
+            [
+                "ElementKind: Structure",
+                "Id: 33333333-3333-3333-3333-333333333333",
+                "Name: OrderDto",
+                "Environment: ClientAndServer",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (types / "OrderDto.xbsl").write_text(
+        "method Presentation(): String\n    return Number\n;\n",
+        encoding="utf-8",
+    )
+    return root

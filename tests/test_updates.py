@@ -33,7 +33,7 @@ def make_update_repositories(tmp_path: Path) -> tuple[Path, Path, str]:
     git(source, "init", "-b", "master")
     git(source, "config", "user.email", "test@example.invalid")
     git(source, "config", "user.name", "Test")
-    write_version(source, "0.5.0")
+    write_version(source, "0.6.0")
     git(source, "add", "pyproject.toml")
     git(source, "commit", "-m", "initial")
 
@@ -41,7 +41,7 @@ def make_update_repositories(tmp_path: Path) -> tuple[Path, Path, str]:
     subprocess.run(["git", "clone", "--quiet", str(source), str(target)], check=True)
     previous_commit = git(target, "rev-parse", "HEAD")
 
-    write_version(source, "0.5.1")
+    write_version(source, "0.6.1")
     git(source, "add", "pyproject.toml")
     git(source, "commit", "-m", "update")
     return source, target, previous_commit
@@ -60,7 +60,7 @@ def test_local_source_reports_available_update(tmp_path: Path) -> None:
     status = service.check()
 
     assert status["updates"]["state"] == "available"
-    assert status["updates"]["available_version"] == "0.5.1"
+    assert status["updates"]["available_version"] == "0.6.1"
     assert status["updates"]["source"]["kind"] == "local"
 
 
@@ -109,7 +109,7 @@ def test_closed_network_failure_does_not_report_server_failure(tmp_path: Path) -
     git(repository, "init", "-b", "master")
     git(repository, "config", "user.email", "test@example.invalid")
     git(repository, "config", "user.name", "Test")
-    write_version(repository, "0.5.0")
+    write_version(repository, "0.6.0")
     git(repository, "add", "pyproject.toml")
     git(repository, "commit", "-m", "initial")
     git(repository, "remote", "add", "origin", "https://127.0.0.1:1/unavailable.git")
@@ -137,7 +137,7 @@ def test_updater_fast_forwards_managed_repository(tmp_path: Path, monkeypatch: p
     )
 
     assert result["state"] == "success"
-    assert git(target, "show", "HEAD:pyproject.toml").endswith('version = "0.5.1"')
+    assert git(target, "show", "HEAD:pyproject.toml").endswith('version = "0.6.1"')
 
 
 def test_updater_rolls_back_when_installation_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

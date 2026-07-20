@@ -20,7 +20,7 @@ def make_source_repository(path: Path) -> None:
     )
     subprocess.run(["git", "-C", str(path), "config", "user.name", "Test"], check=True)
     (path / "pyproject.toml").write_text(
-        '[project]\nname = "1c-element-mcp"\nversion = "0.5.1"\n',
+        '[project]\nname = "1c-element-mcp"\nversion = "0.6.1"\n',
         encoding="utf-8",
     )
     subprocess.run(["git", "-C", str(path), "add", "pyproject.toml"], check=True)
@@ -44,7 +44,7 @@ def test_ui_reports_running_server_and_protects_mutations(tmp_path: Path) -> Non
 
         status = client.get("/api/status")
         assert status.status_code == 200
-        assert status.json()["server"] == {"state": "running", "version": "0.5.0"}
+        assert status.json()["server"] == {"state": "running", "version": "0.6.0"}
 
         assert client.post("/api/updates/check").status_code == 403
         token = re.search(r'name="element-mcp-token" content="([^"]+)"', page.text).group(1)  # type: ignore[union-attr]

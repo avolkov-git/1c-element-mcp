@@ -11,7 +11,7 @@ from element_mcp.cli import build_parser, main
 
 def test_package_version_matches_pyproject() -> None:
     project = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8"))
-    assert __version__ == project["project"]["version"] == "0.5.0"
+    assert __version__ == project["project"]["version"] == "0.6.0"
 
 
 def test_default_http_port_is_9900(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -49,3 +49,9 @@ def test_update_arguments_are_parsed_as_paths(tmp_path: Path) -> None:
     assert arguments.update_source_path == tmp_path / "mirror"
     assert arguments.update_revision == "release"
     assert arguments.update_task_name == "Updater"
+
+
+def test_project_path_is_parsed(tmp_path: Path) -> None:
+    arguments = build_parser().parse_args(["--project-path", str(tmp_path / "project")])
+
+    assert arguments.project_path == tmp_path / "project"

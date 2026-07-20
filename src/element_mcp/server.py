@@ -10,6 +10,7 @@ from element_mcp import __version__
 from element_mcp.config import ServerSettings
 from element_mcp.documentation import DocumentationService
 from element_mcp.installation import discover_element_installations as find_element_installations
+from element_mcp.project import ProjectService
 from element_mcp.ui import register_ui
 from element_mcp.updates import UpdateService
 
@@ -46,14 +47,22 @@ For an existing normalized corpus, call activate_documentation and report succes
 Call cancel_documentation_build only after an explicit user request; cancellation does not remove or alter the
 active corpus. For answers about Element, call search_docs first, then get_document for the selected chunk.
 Preserve product_version, source_version, and provenance whenever they matter to the answer.
+
+For questions about the user's Element source project, first call get_project_status. If it is missing, ask for
+the exact project root and call connect_project only with a path explicitly supplied or confirmed by the user.
+Treat the connected root as read-only. Call get_project_overview before structural analysis, use
+list_project_elements to understand YAML metadata and companion XBSL/XBQL files, then search_project_code and
+read_project_file for implementation details. Never infer an Element object from XBSL alone: pair code with its
+YAML metadata, subsystem, environment, and visibility. Never read paths outside the connected project.
 """.strip()
 
 
 def create_server(settings: ServerSettings) -> FastMCP:
     documentation = DocumentationService(settings)
+    project = ProjectService(settings)
     updates = UpdateService(settings)
     server = FastMCP(
-        name="1C Element Documentation",
+        name="1C Element",
         instructions=SERVER_INSTRUCTIONS,
         host=settings.host,
         port=settings.port,
@@ -69,6 +78,59 @@ def create_server(settings: ServerSettings) -> FastMCP:
     def get_corpus_info() -> dict[str, Any]:
         """Return available corpora, Element versions, index metadata, and MCP server version."""
         return {"server_version": __version__, **documentation.corpus_info()}
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def get_project_status() -> dict[str, Any]:
+        """Call first for project questions to check whether a valid Element source project is connected."""
+        return {"server_version": __version__, **project.project_status()}
+
+    @server.tool(annotations=LOCAL_IDEMPOTENT_WRITE, structured_output=True)
+    def connect_project(
+        project_path: Annotated[str, Field(min_length=1, max_length=4096)],
+    ) -> dict[str, Any]:
+        """Connect a user-confirmed Element project root without modifying any project file."""
+        return {"server_version": __version__, **project.connect(project_path)}
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def get_project_overview() -> dict[str, Any]:
+        """Summarize the active Element project, subsystems, element kinds, source files, and metadata issues."""
+        return project.overview()
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def list_project_elements(
+        query: Annotated[str | None, Field(max_length=300)] = None,
+        element_kind: Annotated[str | None, Field(max_length=128)] = None,
+        subsystem: Annotated[str | None, Field(max_length=1024)] = None,
+        offset: Annotated[int, Field(ge=0)] = 0,
+        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+    ) -> dict[str, Any]:
+        """List Element YAML entities with subsystem, environment, visibility, and companion XBSL/XBQL files."""
+        return project.list_elements(
+            query=query,
+            element_kind=element_kind,
+            subsystem=subsystem,
+            offset=offset,
+            limit=limit,
+        )
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def search_project_code(
+        query: Annotated[str, Field(min_length=2, max_length=300)],
+        file_type: Literal["all", "metadata", "xbsl", "xbql"] = "all",
+        case_sensitive: bool = False,
+        limit: Annotated[int, Field(ge=1, le=50)] = 20,
+    ) -> dict[str, Any]:
+        """Search only UTF-8 Element YAML, XBSL, or XBQL files inside the connected project root."""
+        return project.search(query, file_type=file_type, case_sensitive=case_sensitive, limit=limit)
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def read_project_file(
+        relative_path: Annotated[str, Field(min_length=1, max_length=4096)],
+        start_line: Annotated[int, Field(ge=1)] = 1,
+        line_count: Annotated[int, Field(ge=1, le=400)] = 200,
+    ) -> dict[str, Any]:
+        """Read bounded lines from an Element source file by a relative path returned by project tools."""
+        return project.read_file(relative_path, start_line=start_line, line_count=line_count)
 
     @server.tool(annotations=READ_ONLY, structured_output=True)
     def get_documentation_status() -> dict[str, Any]:
