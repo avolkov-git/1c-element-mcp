@@ -36,12 +36,34 @@ function Assert-LastExitCode {
     }
 }
 
+function Test-PythonCommand {
+    param(
+        [string]$Executable,
+        [string[]]$PrefixArguments = @()
+    )
+
+    # Windows PowerShell 5.1 converts native stderr into an error record. Under
+    # ErrorActionPreference=Stop, a missing py.exe selector would terminate the
+    # installer before it could try the next supported Python version.
+    $PreviousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "SilentlyContinue"
+        & $Executable @PrefixArguments -c "import sys; assert sys.version_info >= (3, 11)" 2>$null | Out-Null
+        return $LASTEXITCODE -eq 0
+    }
+    catch {
+        return $false
+    }
+    finally {
+        $ErrorActionPreference = $PreviousErrorActionPreference
+    }
+}
+
 function Get-PythonCommand {
     $Launcher = Get-Command "py.exe" -ErrorAction SilentlyContinue
     if ($null -ne $Launcher) {
         foreach ($Selector in @("-3.12", "-3.11")) {
-            & $Launcher.Source $Selector -c "import sys; assert sys.version_info >= (3, 11)" 2>$null
-            if ($LASTEXITCODE -eq 0) {
+            if (Test-PythonCommand -Executable $Launcher.Source -PrefixArguments @($Selector)) {
                 return @($Launcher.Source, $Selector)
             }
         }
@@ -49,8 +71,7 @@ function Get-PythonCommand {
 
     $Python = Get-Command "python.exe" -ErrorAction SilentlyContinue
     if ($null -ne $Python) {
-        & $Python.Source -c "import sys; assert sys.version_info >= (3, 11)" 2>$null
-        if ($LASTEXITCODE -eq 0) {
+        if (Test-PythonCommand -Executable $Python.Source) {
             return @($Python.Source)
         }
     }
