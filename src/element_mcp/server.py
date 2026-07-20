@@ -8,6 +8,7 @@ from pydantic import Field
 
 from element_mcp import __version__
 from element_mcp.config import ServerSettings
+from element_mcp.console import ConsoleService
 from element_mcp.documentation import DocumentationService
 from element_mcp.installation import discover_element_installations as find_element_installations
 from element_mcp.project import ProjectService
@@ -15,6 +16,12 @@ from element_mcp.ui import register_ui
 from element_mcp.updates import UpdateService
 
 READ_ONLY = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+EXTERNAL_READ_ONLY = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=True,
+)
 LOCAL_WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
 LOCAL_IDEMPOTENT_WRITE = ToolAnnotations(
     readOnlyHint=False,
@@ -54,12 +61,23 @@ Treat the connected root as read-only. Call get_project_overview before structur
 list_project_elements to understand YAML metadata and companion XBSL/XBQL files, then search_project_code and
 read_project_file for implementation details. Never infer an Element object from XBSL alone: pair code with its
 YAML metadata, subsystem, environment, and visibility. Never read paths outside the connected project.
+
+For questions about projects available through the Element Management Console, first call get_console_status.
+The Console connection is optional and must come from the MCP process environment, a configured console file, or
+an explicitly selected Element/VS Code settings file. Never ask the user to paste Client-Secret or an access token
+into chat or a tool argument, and never expose credentials in an answer. If the status is missing, explain the
+supported configuration sources. If it is unauthenticated or forbidden, distinguish the authorization failure
+from an empty project list. Use list_console_spaces when the space is ambiguous. Use list_space_projects for the
+catalog and get_console_project for one project. In an Element IDE context, omit space_id first: the server can
+derive it from 1C.projectId. Console metadata does not grant filesystem access; use connect_project only after the
+user confirms the local checkout path.
 """.strip()
 
 
 def create_server(settings: ServerSettings) -> FastMCP:
     documentation = DocumentationService(settings)
     project = ProjectService(settings)
+    console = ConsoleService(settings)
     updates = UpdateService(settings)
     server = FastMCP(
         name="1C Element",
@@ -83,6 +101,38 @@ def create_server(settings: ServerSettings) -> FastMCP:
     def get_project_status() -> dict[str, Any]:
         """Call first for project questions to check whether a valid Element source project is connected."""
         return {"server_version": __version__, **project.project_status()}
+
+    @server.tool(annotations=EXTERNAL_READ_ONLY, structured_output=True)
+    def get_console_status() -> dict[str, Any]:
+        """Call first for Console questions; verify configured auth without returning tokens or secrets."""
+        return {"server_version": __version__, **console.status()}
+
+    @server.tool(annotations=EXTERNAL_READ_ONLY, structured_output=True)
+    def list_console_spaces() -> dict[str, Any]:
+        """List spaces visible to the configured Element Management Console identity."""
+        return console.list_spaces()
+
+    @server.tool(annotations=EXTERNAL_READ_ONLY, structured_output=True)
+    def list_space_projects(
+        space_id: Annotated[str | None, Field(max_length=64)] = None,
+        include_deleted: bool = False,
+        offset: Annotated[int, Field(ge=0)] = 0,
+        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+    ) -> dict[str, Any]:
+        """List project metadata in a space; omit space_id to use the current IDE project or sole visible space."""
+        return console.list_space_projects(
+            space_id=space_id,
+            include_deleted=include_deleted,
+            offset=offset,
+            limit=limit,
+        )
+
+    @server.tool(annotations=EXTERNAL_READ_ONLY, structured_output=True)
+    def get_console_project(
+        project_id: Annotated[str | None, Field(max_length=64)] = None,
+    ) -> dict[str, Any]:
+        """Read one Console project; omit project_id to use 1C.projectId from the IDE context."""
+        return console.get_project(project_id)
 
     @server.tool(annotations=LOCAL_IDEMPOTENT_WRITE, structured_output=True)
     def connect_project(

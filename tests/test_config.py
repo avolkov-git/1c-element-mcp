@@ -6,6 +6,7 @@ import pytest
 
 from element_mcp.config import (
     ConfigurationStore,
+    ServerSettings,
     discover_corpus_path,
     discover_project_path,
     discover_update_source_path,
@@ -75,3 +76,9 @@ def test_explicit_project_path_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     monkeypatch.setenv("ELEMENT_PROJECT_PATH", str(tmp_path / "environment"))
 
     assert discover_project_path(explicit) == explicit.resolve()
+
+
+def test_console_config_defaults_next_to_main_config(tmp_path: Path) -> None:
+    settings = ServerSettings(config_path=tmp_path / "config" / "config.json")
+
+    assert settings.resolved_console_config_path == (tmp_path / "config" / "console.json").resolve()

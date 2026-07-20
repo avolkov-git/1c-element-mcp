@@ -12,6 +12,9 @@ from mcp.client.stdio import stdio_client
 def test_stdio_server_exposes_read_only_tools(corpus_path: Path, element_project_path: Path) -> None:
     async def exercise_server() -> None:
         environment = dict(os.environ)
+        for key in list(environment):
+            if key.startswith("ELEMENT_CONSOLE_") or key == "ELEMENT_IDE_SETTINGS_PATH":
+                environment.pop(key)
         environment["ELEMENT_DOCS_PATH"] = str(corpus_path)
         environment["ELEMENT_PROJECT_PATH"] = str(element_project_path)
         parameters = StdioServerParameters(
@@ -25,7 +28,7 @@ def test_stdio_server_exposes_read_only_tools(corpus_path: Path, element_project
         ):
             initialized = await session.initialize()
             assert initialized.serverInfo.name == "1C Element"
-            assert initialized.serverInfo.version == "0.6.0"
+            assert initialized.serverInfo.version == "0.7.0"
             assert initialized.instructions is not None
             assert "first call\nget_documentation_status" in initialized.instructions
             assert "Never call start_documentation_build without that consent" in initialized.instructions
@@ -36,6 +39,8 @@ def test_stdio_server_exposes_read_only_tools(corpus_path: Path, element_project
             assert "call search_docs first, then get_document" in initialized.instructions
             assert "first call get_project_status" in initialized.instructions
             assert "Never read paths outside the connected project" in initialized.instructions
+            assert "first call get_console_status" in initialized.instructions
+            assert "Never ask the user to paste Client-Secret" in initialized.instructions
             tools = await session.list_tools()
             names = {tool.name for tool in tools.tools}
             assert names == {
@@ -44,12 +49,16 @@ def test_stdio_server_exposes_read_only_tools(corpus_path: Path, element_project
                 "connect_project",
                 "discover_element_installations",
                 "get_corpus_info",
+                "get_console_project",
+                "get_console_status",
                 "get_document",
                 "get_documentation_build_status",
                 "get_documentation_status",
                 "get_project_overview",
                 "get_project_status",
                 "list_project_elements",
+                "list_console_spaces",
+                "list_space_projects",
                 "read_project_file",
                 "search_docs",
                 "search_project_code",
@@ -58,12 +67,16 @@ def test_stdio_server_exposes_read_only_tools(corpus_path: Path, element_project
             read_only = {
                 "discover_element_installations",
                 "get_corpus_info",
+                "get_console_project",
+                "get_console_status",
                 "get_document",
                 "get_documentation_build_status",
                 "get_documentation_status",
                 "get_project_overview",
                 "get_project_status",
                 "list_project_elements",
+                "list_console_spaces",
+                "list_space_projects",
                 "read_project_file",
                 "search_docs",
                 "search_project_code",
@@ -78,6 +91,7 @@ def test_stdio_server_exposes_read_only_tools(corpus_path: Path, element_project
             assert "After search_docs" in (descriptions["get_document"] or "")
             assert "YAML entities" in (descriptions["list_project_elements"] or "")
             assert "relative path" in (descriptions["read_project_file"] or "")
+            assert "current IDE project" in (descriptions["list_space_projects"] or "")
 
             result = await session.call_tool("search_docs", {"query": "ВебМетод", "corpus": "lang"})
             assert result.isError is False
@@ -89,12 +103,20 @@ def test_stdio_server_exposes_read_only_tools(corpus_path: Path, element_project
             assert overview.structuredContent is not None
             assert overview.structuredContent["project"]["name"] == "ExampleProject"
 
+            console = await session.call_tool("get_console_status", {})
+            assert console.isError is False
+            assert console.structuredContent is not None
+            assert console.structuredContent["status"] == "missing"
+
     asyncio.run(exercise_server())
 
 
 def test_stdio_server_reports_missing_corpus(tmp_path: Path) -> None:
     async def exercise_server() -> None:
         environment = dict(os.environ)
+        for key in list(environment):
+            if key.startswith("ELEMENT_CONSOLE_") or key == "ELEMENT_IDE_SETTINGS_PATH":
+                environment.pop(key)
         environment.pop("ELEMENT_DOCS_PATH", None)
         environment.pop("ELEMENT_PROJECT_PATH", None)
         environment["ELEMENT_MCP_CONFIG_PATH"] = str(tmp_path / "config.json")

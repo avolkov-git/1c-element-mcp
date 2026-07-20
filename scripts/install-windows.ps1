@@ -9,6 +9,7 @@ param(
     [ValidateRange(1, 65535)]
     [int]$Port = 9900,
     [string]$UpdateSourcePath = "",
+    [string]$IdeSettingsPath = "",
     [bool]$RegisterStartupTask = $true
 )
 
@@ -29,6 +30,12 @@ $VenvDirectory = Join-Path $AppDirectory ".venv"
 
 if (-not [string]::IsNullOrWhiteSpace($UpdateSourcePath)) {
     $UpdateSourcePath = [System.IO.Path]::GetFullPath($UpdateSourcePath)
+}
+if (-not [string]::IsNullOrWhiteSpace($IdeSettingsPath)) {
+    $IdeSettingsPath = [System.IO.Path]::GetFullPath($IdeSettingsPath)
+    if (-not (Test-Path -LiteralPath $IdeSettingsPath -PathType Leaf)) {
+        throw "The Element or VS Code settings file does not exist: $IdeSettingsPath"
+    }
 }
 
 function Write-Step {
@@ -200,9 +207,14 @@ if (-not [string]::IsNullOrWhiteSpace($UpdateSourcePath)) {
     $QuotedUpdateSource = ConvertTo-PowerShellLiteral $UpdateSourcePath
     $UpdateSourceRunnerArgument = " --update-source-path $QuotedUpdateSource"
 }
+$IdeSettingsRunnerArgument = ""
+if (-not [string]::IsNullOrWhiteSpace($IdeSettingsPath)) {
+    $QuotedIdeSettings = ConvertTo-PowerShellLiteral $IdeSettingsPath
+    $IdeSettingsRunnerArgument = " --ide-settings-path $QuotedIdeSettings"
+}
 $RunnerContent = @"
 `$ErrorActionPreference = 'Continue'
-& $QuotedExecutable --transport streamable-http --host 127.0.0.1 --port $Port --config-path $QuotedConfig --data-path $QuotedData --update-repository-path $QuotedApp --update-revision $QuotedRevision --update-task-name $QuotedUpdaterTask$UpdateSourceRunnerArgument *>> $QuotedLog
+& $QuotedExecutable --transport streamable-http --host 127.0.0.1 --port $Port --config-path $QuotedConfig --data-path $QuotedData --update-repository-path $QuotedApp --update-revision $QuotedRevision --update-task-name $QuotedUpdaterTask$UpdateSourceRunnerArgument$IdeSettingsRunnerArgument *>> $QuotedLog
 exit `$LASTEXITCODE
 "@
 $RunnerContent | Set-Content -LiteralPath $RunnerPath -Encoding UTF8
@@ -266,6 +278,10 @@ Write-Host "Version:      $InstalledVersion"
 Write-Host "MCP endpoint: http://127.0.0.1:$Port/mcp"
 Write-Host "Application:  $AppDirectory"
 Write-Host "Configuration:$ConfigPath"
+Write-Host "Console config:$ConfigDirectory\console.json"
+if (-not [string]::IsNullOrWhiteSpace($IdeSettingsPath)) {
+    Write-Host "IDE settings:  $IdeSettingsPath"
+}
 Write-Host "Data:         $DataDirectory"
 Write-Host "Log:          $LogPath"
 if ($RegisterStartupTask) {

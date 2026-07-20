@@ -26,6 +26,8 @@ def test_windows_installer_has_safe_server_defaults() -> None:
     assert '--config-path `"$ConfigPath`"' in script
     assert "--update-repository-path" in script
     assert "[string]$UpdateSourcePath" in script
+    assert "[string]$IdeSettingsPath" in script
+    assert "--ide-settings-path" in script
     assert "clone $UpdateSourcePath $AppDirectory" in script
     assert "fetch $InstallSource $Revision" in script
     assert "`$ErrorActionPreference = 'Continue'" in script
@@ -35,3 +37,14 @@ def test_windows_installer_has_safe_server_defaults() -> None:
     assert "New-NetFirewallRule" not in script
     assert "0.0.0.0" not in script
     assert "GitHubToken" not in script
+
+
+def test_windows_console_configuration_uses_dpapi_and_restrictive_acl() -> None:
+    script = (Path(__file__).parents[1] / "scripts" / "configure-console-windows.ps1").read_text(encoding="utf-8")
+    assert script.isascii()
+    assert "#Requires -RunAsAdministrator" in script
+    assert 'Read-Host "Client-Secret" -AsSecureString' in script
+    assert "DataProtectionScope]::LocalMachine" in script
+    assert "client_secret_dpapi" in script
+    assert "/inheritance:r" in script
+    assert "*S-1-5-18:(R)" in script

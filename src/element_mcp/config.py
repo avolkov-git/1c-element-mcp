@@ -160,6 +160,8 @@ def discover_project_path(
 class ServerSettings:
     corpus_path: Path | None = None
     project_path: Path | None = None
+    console_config_path: Path | None = None
+    ide_settings_path: Path | None = None
     config_path: Path | None = None
     data_path: Path | None = None
     transport: str = "stdio"
@@ -181,6 +183,16 @@ class ServerSettings:
     @property
     def resolved_project_path(self) -> Path | None:
         return self.project_path.expanduser().resolve() if self.project_path else None
+
+    @property
+    def resolved_console_config_path(self) -> Path:
+        if self.console_config_path:
+            return self.console_config_path.expanduser().resolve()
+        return self.resolved_config_path.parent / "console.json"
+
+    @property
+    def resolved_ide_settings_path(self) -> Path | None:
+        return self.ide_settings_path.expanduser().resolve() if self.ide_settings_path else None
 
     @property
     def resolved_update_repository_path(self) -> Path | None:

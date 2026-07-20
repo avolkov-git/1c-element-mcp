@@ -2,7 +2,7 @@
 
 MCP-сервер для работы ИИ-агентов с «1С:Предприятие.Элемент». Сервер умеет локально создавать нормализованный корпус из установленного серверного бандла, проверять и подключать его, а затем выполнять гибридный поиск по языку, Management Console и серверной платформе.
 
-Текущая версия: **0.6.0**.
+Текущая версия: **0.7.0**.
 
 ## Что делает сервер
 
@@ -67,6 +67,85 @@ element-mcp --transport stdio --project-path /absolute/path/to/element-project
 
 или переменной `ELEMENT_PROJECT_PATH`. Такой путь имеет приоритет над сохранённой настройкой и меняется только
 после перезапуска MCP.
+
+## Проекты Панели управления
+
+Версия `0.7.0` добавляет отдельный read-only контур Console:
+
+- `get_console_status` проверяет настройки, получение токена и доступ к пространствам;
+- `list_console_spaces` показывает пространства, доступные настроенной учётной записи;
+- `list_space_projects` получает проекты пространства и дополняет их именами, описаниями, типами и состоянием;
+- `get_console_project` читает один проект или текущий `1C.projectId` из окружения IDE.
+
+Console возвращает для пространства только идентификаторы проектов, поэтому MCP сам получает полные сведения о
+каждом проекте. Результат отражает права настроенной учётной записи: `403` не выдаётся за пустой список. Каталог
+Console не предоставляет доступ к локальным исходникам. Для анализа кода выбранный проект по-прежнему нужно
+связать с подтверждённым пользователем Git-каталогом через `connect_project`.
+
+### Element IDE и VS Code
+
+Плагин Element `9.2` использует настройки `1C.server`, `1C.clientId`, `1C.clientSecret` и `1C.projectId`. Когда
+Codex запускает MCP как дочерний `stdio`-процесс, сервер проверяет известные файлы текущего workspace:
+`.vscode/settings.json`, `.theia/settings.json`, `.settings/settings.json` и корневой `*.code-workspace`. Можно
+явно передать объединённый файл настроек, который видит плагин:
+
+```bash
+element-mcp --transport stdio --ide-settings-path /absolute/path/to/settings.json
+```
+
+Поддерживается и provisioning context Element с вложенным объектом `settings` и ключами `paas-url`, `client-id`,
+`client-secret`, `paas-project-id`, `paas-space-id`. Если задан `1C.projectId`, `list_space_projects` сначала
+получает текущий проект и автоматически определяет его пространство.
+
+Сам факт открытой браузерной сессии не передаёт cookie или внутренний кэш токена внешнему MCP. Прозрачный режим
+работает, только когда плагин намеренно запускает MCP с нужными переменными окружения или предоставляет явно
+выбранный файл настроек. Секреты не передаются через аргументы MCP tools и не появляются в диалоге.
+
+### Отдельный MCP и Windows-служба
+
+Для постоянно работающего HTTP-сервера используются переменные окружения или отдельный `console.json` рядом с
+основным `config.json`. На стандартной Windows-установке это
+`C:\ProgramData\1c-element-mcp\config\console.json`. Настройте его из PowerShell администратора: скрипт запросит
+Client-Secret скрыто, зашифрует его Windows DPAPI и ограничит ACL файла системной учётной записью и
+администраторами.
+
+```powershell
+.\scripts\configure-console-windows.ps1 `
+  -Server "https://element-server/console" `
+  -ClientId "<client-id>" `
+  -ProjectId "<необязательный-project-uuid>"
+
+Restart-ScheduledTask -TaskName "1C Element MCP"
+```
+
+Если служба должна читать уже существующий файл настроек Element/VS Code, передайте его установщику и повторно
+запустите установку:
+
+```powershell
+.\scripts\install-windows.ps1 -IdeSettingsPath "D:\Element\settings.json"
+```
+
+Служба работает от `SYSTEM`, поэтому файл должен быть доступен этой учётной записи. Это подходит и закрытому
+контуру: адрес Console может быть внутренним, а доверенный корневой сертификат задаётся полем `ca_bundle` или
+переменной `ELEMENT_CONSOLE_CA_BUNDLE`. Проверка TLS включена по умолчанию.
+
+Для контейнера, Linux или запуска из плагина доступны переменные:
+
+```text
+ELEMENT_CONSOLE_URL
+ELEMENT_CONSOLE_CLIENT_ID
+ELEMENT_CONSOLE_CLIENT_SECRET
+ELEMENT_CONSOLE_ACCESS_TOKEN
+ELEMENT_CONSOLE_PROJECT_ID
+ELEMENT_CONSOLE_SPACE_ID
+ELEMENT_CONSOLE_CA_BUNDLE
+ELEMENT_IDE_SETTINGS_PATH
+ELEMENT_CONSOLE_CONFIG_PATH
+```
+
+Access token имеет приоритет над парой Client-Id/Client-Secret и хранится только в памяти процесса. При
+client credentials MCP получает `id_token` через `/sys/token`, кэширует его в памяти и один раз обновляет после
+`401`.
 
 ## Установка для разработки
 
