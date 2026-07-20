@@ -1,0 +1,27 @@
+from __future__ import annotations
+
+import tomllib
+from pathlib import Path
+
+import pytest
+
+from element_mcp import __version__
+from element_mcp.cli import build_parser, main
+
+
+def test_package_version_matches_pyproject() -> None:
+    project = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8"))
+    assert __version__ == project["project"]["version"] == "0.1.0"
+
+
+def test_http_refuses_public_bind_without_authentication() -> None:
+    with pytest.raises(SystemExit) as error:
+        main(["--transport", "streamable-http", "--host", "0.0.0.0"])
+    assert error.value.code == 2
+
+
+def test_invalid_environment_port_has_cli_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ELEMENT_MCP_PORT", "invalid")
+    with pytest.raises(SystemExit) as error:
+        build_parser().parse_args([])
+    assert error.value.code == 2
