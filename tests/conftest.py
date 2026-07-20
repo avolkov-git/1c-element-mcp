@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
@@ -65,6 +66,7 @@ def _create_index(path: Path, corpus: str, chunks: list[dict]) -> None:
     database = sqlite3.connect(path / "index.sqlite")
     database.executescript(
         """
+        CREATE TABLE documents(id TEXT PRIMARY KEY);
         CREATE TABLE chunks(
             id TEXT PRIMARY KEY, document_id TEXT NOT NULL, logical_id TEXT NOT NULL,
             corpus TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL,
@@ -78,6 +80,8 @@ def _create_index(path: Path, corpus: str, chunks: list[dict]) -> None:
         );
         """
     )
+    for document_id in sorted({chunk["document_id"] for chunk in chunks}):
+        database.execute("INSERT INTO documents VALUES (?)", (document_id,))
     for chunk in chunks:
         database.execute(
             """
@@ -99,7 +103,7 @@ def _create_index(path: Path, corpus: str, chunks: list[dict]) -> None:
                 f"docs-{corpus}/versions/9.2.4-6/test.md",
                 "official-html",
                 "[]",
-                "test-sha256",
+                hashlib.sha256(chunk["text"].encode("utf-8")).hexdigest(),
                 chunk["text"],
             ),
         )
@@ -113,6 +117,25 @@ def _create_index(path: Path, corpus: str, chunks: list[dict]) -> None:
     with (path / "vector-ids.jsonl").open("w", encoding="utf-8") as stream:
         for chunk in chunks:
             stream.write(json.dumps({"chunk_id": chunk["id"]}, ensure_ascii=False) + "\n")
+    documents = []
+    for document_id in sorted({chunk["document_id"] for chunk in chunks}):
+        text = "\n\n".join(chunk["text"] for chunk in chunks if chunk["document_id"] == document_id)
+        documents.append({"id": document_id, "text": text, "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest()})
+    with (path / "documents.jsonl").open("w", encoding="utf-8") as stream:
+        for document in documents:
+            stream.write(json.dumps(document, ensure_ascii=False) + "\n")
+    with (path / "chunks.jsonl").open("w", encoding="utf-8") as stream:
+        for chunk in chunks:
+            value = {
+                **chunk,
+                "document_id": chunk["document_id"],
+                "sha256": hashlib.sha256(chunk["text"].encode("utf-8")).hexdigest(),
+            }
+            stream.write(json.dumps(value, ensure_ascii=False) + "\n")
+    _write_json(
+        path / "vector-meta.json",
+        {"rows": len(chunks), "dimensions": dimensions, "schema_version": 1},
+    )
     _write_json(
         path / "manifest.json",
         {

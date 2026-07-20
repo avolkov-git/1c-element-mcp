@@ -11,7 +11,7 @@ from element_mcp.cli import build_parser, main
 
 def test_package_version_matches_pyproject() -> None:
     project = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8"))
-    assert __version__ == project["project"]["version"] == "0.1.0"
+    assert __version__ == project["project"]["version"] == "0.2.0"
 
 
 def test_http_refuses_public_bind_without_authentication() -> None:
