@@ -43,6 +43,7 @@ class ConsoleConnection:
     client_secret: str | None = field(default=None, repr=False)
     access_token: str | None = field(default=None, repr=False)
     project_id: str | None = None
+    application_id: str | None = None
     space_id: str | None = None
     verify_tls: bool = True
     ca_bundle: Path | None = None
@@ -54,6 +55,7 @@ class ConsoleConnection:
             "auth_kind": self.auth_kind,
             "client_id_present": bool(self.client_id),
             "project_id": self.project_id,
+            "application_id": self.application_id,
             "space_id": self.space_id,
             "verify_tls": self.verify_tls,
             "ca_bundle": str(self.ca_bundle) if self.ca_bundle else None,
@@ -287,6 +289,7 @@ class ConsoleService:
             "client_secret",
             "access_token",
             "project_id",
+            "application_id",
             "space_id",
             "verify_tls",
             "ca_bundle",
@@ -498,6 +501,44 @@ class ConsoleService:
         except ConsoleRequestError as error:
             return _request_error_payload(error)
 
+    def get_current_application(self) -> dict[str, Any]:
+        """Read the published application attached to the active Element IDE session."""
+        try:
+            connection = self.resolver.resolve()
+            if connection.source != "ide_session":
+                return {
+                    "status": "not_available",
+                    "message": (
+                        "Текущее приложение определяется только из активной Element IDE-сессии. "
+                        "Обычный VS Code не выбирает приложение автоматически."
+                    ),
+                }
+            if not connection.application_id:
+                return {
+                    "status": "missing",
+                    "message": "Element IDE не передала 1C.applicationId для текущего опубликованного приложения",
+                }
+            application_id = _validate_uuid(connection.application_id, "application_id")
+            application = self._application(connection, application_id)
+            application_project_id = _application_project_id(application)
+            return {
+                "status": "ready",
+                "connection": connection.public_info(),
+                "application": application,
+                "ide_project_id": connection.project_id,
+                "application_project_id": application_project_id,
+                "matches_ide_project": (
+                    _same_uuid(application_project_id, connection.project_id)
+                    if application_project_id and connection.project_id
+                    else None
+                ),
+                "message": "Получена карточка опубликованного приложения, связанного с текущей Element IDE",
+            }
+        except ConsoleConfigurationError as error:
+            return {"status": "not_available", "message": str(error)}
+        except ConsoleRequestError as error:
+            return _request_error_payload(error)
+
     def list_space_projects(
         self,
         *,
@@ -611,6 +652,15 @@ class ConsoleService:
             raise ConsoleRequestError("Панель управления вернула некорректное описание проекта")
         return _project_payload(value)
 
+    def _application(self, connection: ConsoleConnection, application_id: str) -> dict[str, Any]:
+        value = self.client.get(connection, f"/api/v2/applications/{application_id}")
+        if not isinstance(value, dict):
+            raise ConsoleRequestError("Панель управления вернула некорректное описание приложения")
+        returned_id = value.get("id")
+        if not isinstance(returned_id, str) or not _same_uuid(returned_id, application_id):
+            raise ConsoleRequestError("Панель управления вернула описание другого приложения")
+        return _application_payload(value)
+
 
 def _environment_values(environ: Mapping[str, str]) -> dict[str, Any]:
     mapping = {
@@ -673,6 +723,13 @@ def _connection_from_values(values: Mapping[str, Any], *, source: str) -> Consol
         raise ConsoleConfigurationError(f"Файл CA bundle не найден: {ca_bundle}")
 
     project_id = _first_string(values, "project_id", "project-id", "1C.projectId", "paas-project-id")
+    application_id = _first_string(
+        values,
+        "application_id",
+        "application-id",
+        "1C.applicationId",
+        "paas-application-id",
+    )
     space_id = _first_string(values, "space_id", "space-id", "1C.spaceId", "paas-space-id")
     return ConsoleConnection(
         base_url=base_url,
@@ -682,6 +739,7 @@ def _connection_from_values(values: Mapping[str, Any], *, source: str) -> Consol
         client_secret=client_secret,
         access_token=token,
         project_id=project_id,
+        application_id=application_id,
         space_id=space_id,
         verify_tls=verify_tls,
         ca_bundle=ca_bundle,
@@ -1017,6 +1075,13 @@ def _validate_uuid(value: str, name: str) -> str:
         raise ConsoleConfigurationError(f"{name} должен быть UUID") from error
 
 
+def _same_uuid(left: str, right: str) -> bool:
+    try:
+        return uuid.UUID(left.strip()) == uuid.UUID(right.strip())
+    except (ValueError, AttributeError):
+        return False
+
+
 def _as_items(value: Any, *, resource: str) -> list[Any]:
     if isinstance(value, list):
         return value
@@ -1059,6 +1124,66 @@ def _project_payload(value: Mapping[str, Any]) -> dict[str, Any]:
         "project_kind": value.get("project-kind", value.get("projectKind")),
         "default_assembly": default if isinstance(default, dict) else None,
     }
+
+
+def _application_payload(value: Mapping[str, Any]) -> dict[str, Any]:
+    project = value.get("project")
+    source = value.get("source")
+    current_task = value.get("current-task", value.get("currentTask"))
+    return {
+        "id": value.get("id"),
+        "name": value.get("name"),
+        "display_name": value.get("display-name", value.get("displayName")),
+        "description": value.get("description"),
+        "date_created": value.get("date-created", value.get("dateCreated")),
+        "status": value.get("status"),
+        "error": value.get("error"),
+        "uri": value.get("uri"),
+        "development_mode": value.get("development-mode", value.get("developmentMode")),
+        "debugging": value.get("debugging"),
+        "space_id": value.get("space-id", value.get("spaceId")),
+        "technology_version": value.get("technology-version", value.get("platformVersion")),
+        "dbms_type": value.get("dbms-type", value.get("dbmsType")),
+        "autostarting_scheduled_jobs": value.get(
+            "autostarting-scheduled-jobs",
+            value.get("autostartingScheduledJobs"),
+        ),
+        "autostarting_esb": value.get("autostarting-esb", value.get("autostartingEsb")),
+        "project": {"id": project.get("id")} if isinstance(project, Mapping) else None,
+        "source": (
+            {
+                "type": source.get("type"),
+                "project_version_id": source.get("project-version-id", source.get("projectVersionId")),
+                "project_id": source.get("image-id", source.get("projectId")),
+                "project_name": source.get("project-name", source.get("projectName")),
+                "project_version": source.get("project-version", source.get("projectVersion")),
+                "dump_id": source.get("dump-id", source.get("dumpId")),
+            }
+            if isinstance(source, Mapping)
+            else None
+        ),
+        "current_task": (
+            {
+                "id": current_task.get("id"),
+                "status": current_task.get("status"),
+                "operation_type": current_task.get("operation-type", current_task.get("operationType")),
+                "start_date": current_task.get("start-date", current_task.get("startDate")),
+                "end_date": current_task.get("end-date", current_task.get("endDate")),
+            }
+            if isinstance(current_task, Mapping)
+            else None
+        ),
+    }
+
+
+def _application_project_id(application: Mapping[str, Any]) -> str | None:
+    project = application.get("project")
+    if isinstance(project, Mapping) and isinstance(project.get("id"), str):
+        return project["id"]
+    source = application.get("source")
+    if isinstance(source, Mapping) and isinstance(source.get("project_id"), str):
+        return source["project_id"]
+    return None
 
 
 def _request_status(status_code: int | None) -> str:

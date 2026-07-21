@@ -22,6 +22,7 @@ SPACE_ID = "11111111-1111-1111-1111-111111111111"
 OTHER_SPACE_ID = "22222222-2222-2222-2222-222222222222"
 PROJECT_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 OTHER_PROJECT_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+APPLICATION_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 
 
 def test_environment_connection_is_resolved_without_exposing_secret(tmp_path: Path) -> None:
@@ -45,6 +46,7 @@ def test_environment_connection_is_resolved_without_exposing_secret(tmp_path: Pa
         "auth_kind": "client_credentials",
         "client_id_present": True,
         "project_id": PROJECT_ID,
+        "application_id": None,
         "space_id": None,
         "verify_tls": True,
         "ca_bundle": None,
@@ -62,6 +64,7 @@ def test_element_ide_jsonc_settings_are_supported(tmp_path: Path) -> None:
           "1C.clientId": "ide-client",
           "1C.clientSecret": "ide-secret",
           "1C.projectId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+          "1C.applicationId": "cccccccc-cccc-cccc-cccc-cccccccccccc",
         }
         """,
         encoding="utf-8",
@@ -76,6 +79,7 @@ def test_element_ide_jsonc_settings_are_supported(tmp_path: Path) -> None:
     assert connection.base_url == "http://127.0.0.1:8080/console"
     assert connection.source == "ide_settings"
     assert connection.project_id == PROJECT_ID
+    assert connection.application_id == APPLICATION_ID
 
 
 def test_workspace_provision_context_settings_are_supported(tmp_path: Path) -> None:
@@ -346,6 +350,7 @@ def test_verified_ide_session_is_used_without_persisting_or_exposing_secret(tmp_
             "client_id": "ide-client",
             "client_secret": "ide-secret",
             "project_id": PROJECT_ID,
+            "application_id": APPLICATION_ID,
             "ignored": "must-not-be-stored",
         }
     )
@@ -362,6 +367,7 @@ def test_verified_ide_session_is_used_without_persisting_or_exposing_secret(tmp_
         "client_id": "ide-client",
         "client_secret": "ide-secret",
         "project_id": PROJECT_ID,
+        "application_id": APPLICATION_ID,
     }
     assert len([url for url in calls if url.endswith("/sys/token")]) == 1
 
@@ -384,6 +390,70 @@ def test_rejected_ide_session_does_not_replace_existing_connection(tmp_path: Pat
         service.configure_ide_session({"server": "https://bad.example/console", "access_token": "bad-token"})
 
     assert service.status()["connection"]["base_url"] == "https://good.example/console"
+
+
+def test_current_application_uses_only_exact_ide_session_context(tmp_path: Path) -> None:
+    requested_paths: list[str] = []
+
+    def requester(method: str, url: str, headers: Any, body: bytes | None, context: Any, timeout: float) -> Any:
+        requested_paths.append(urllib.parse.urlsplit(url).path)
+        if url.endswith("/api/v2/spaces"):
+            return [space_response(SPACE_ID, "Основное")]
+        if url.endswith(f"/api/v2/applications/{APPLICATION_ID}"):
+            return application_response(APPLICATION_ID, project_id=PROJECT_ID)
+        raise AssertionError(url)
+
+    service = ConsoleService(
+        ServerSettings(config_path=tmp_path / "config.json"),
+        client=ConsoleHttpClient(requester=requester),
+    )
+    service.configure_ide_session(
+        {
+            "server": "https://element.example/console",
+            "access_token": "ide-token",
+            "project_id": PROJECT_ID,
+            "application_id": APPLICATION_ID,
+        }
+    )
+
+    result = service.get_current_application()
+
+    assert result["status"] == "ready"
+    assert result["connection"]["source"] == "ide_session"
+    assert result["application"]["id"] == APPLICATION_ID
+    assert result["application"]["display_name"] == "Тестовое приложение"
+    assert result["application"]["status"] == "Running"
+    assert result["application"]["uri"] == "https://apps.example/test"
+    assert result["application"]["source"]["project_version"] == "1.4.2"
+    assert result["application"]["current_task"]["operation_type"] == "Update"
+    assert result["matches_ide_project"] is True
+    assert requested_paths[-1] == f"/console/api/v2/applications/{APPLICATION_ID}"
+    assert "ide-token" not in json.dumps(result)
+
+
+def test_current_application_is_not_inferred_for_vscode_or_standalone_console(tmp_path: Path) -> None:
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {
+                "1C.server": "https://element.example/console",
+                "access_token": "token",
+                "1C.projectId": PROJECT_ID,
+                "1C.applicationId": APPLICATION_ID,
+            }
+        ),
+        encoding="utf-8",
+    )
+    resolver = ConsoleContextResolver(
+        ServerSettings(config_path=tmp_path / "config.json", ide_settings_path=settings_path),
+        environ={},
+    )
+    service = ConsoleService(resolver.settings, resolver=resolver)
+
+    result = service.get_current_application()
+
+    assert result["status"] == "not_available"
+    assert "только" in result["message"]
 
 
 def test_persistent_connection_is_validated_saved_and_reversibly_disabled(tmp_path: Path) -> None:
@@ -483,4 +553,39 @@ def space_response(space_id: str, name: str) -> dict[str, Any]:
         "name": name,
         "owner": "owner",
         "projects-count": 2,
+    }
+
+
+def application_response(application_id: str, *, project_id: str) -> dict[str, Any]:
+    return {
+        "id": application_id,
+        "name": "test-app",
+        "display-name": "Тестовое приложение",
+        "description": "Опубликованный экземпляр",
+        "date-created": "2026-07-21T00:00:00Z",
+        "development-mode": True,
+        "debugging": True,
+        "uri": "https://apps.example/test",
+        "space-id": SPACE_ID,
+        "technology-version": "9.2.4",
+        "dbms-type": "PostgreSQL",
+        "project": {"id": project_id},
+        "source": {
+            "type": "image",
+            "project-version-id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+            "image-id": project_id,
+            "project-name": "Текущий",
+            "project-version": "1.4.2",
+        },
+        "current-task": {
+            "id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+            "status": "Completed",
+            "operation-type": "Update",
+            "start-date": "2026-07-21T01:00:00Z",
+            "end-date": "2026-07-21T01:01:00Z",
+        },
+        "status": "Running",
+        "error": None,
+        "default-user-list": "must-not-be-returned",
+        "user-lists": ["must-not-be-returned"],
     }

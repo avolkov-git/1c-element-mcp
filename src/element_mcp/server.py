@@ -89,6 +89,11 @@ Element IDE it uses the workspace and Git status supplied by the official g5rt.t
 omit workspace_path only for stdio launched from the workspace; otherwise pass a user-confirmed local workspace.
 An exact name is only a suggestion, not proof. Call connect_project only after the user confirms a candidate, unless
 get_project_status already reports that the sole IDE project was selected automatically.
+
+For questions about the application currently attached to Element IDE, call get_current_application. This tool
+has no application_id argument and works only with the temporary Element plugin handoff containing
+1C.applicationId. Treat it as the exact published application instance selected for the current IDE. Do not infer
+a current application in ordinary VS Code from the project name, source tree, or standalone Console credentials.
 """.strip()
 
 
@@ -153,6 +158,11 @@ def create_server(settings: ServerSettings) -> FastMCP:
     ) -> dict[str, Any]:
         """Read one Console project; omit project_id to use 1C.projectId from the IDE context."""
         return console.get_project(project_id)
+
+    @server.tool(annotations=EXTERNAL_READ_ONLY, structured_output=True)
+    def get_current_application() -> dict[str, Any]:
+        """Read the exact published application attached to the active Element IDE; unavailable in ordinary VS Code."""
+        return {"server_version": __version__, **console.get_current_application()}
 
     @server.tool(annotations=EXTERNAL_READ_ONLY, structured_output=True)
     def match_console_project(

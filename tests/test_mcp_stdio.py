@@ -34,7 +34,7 @@ def test_stdio_server_exposes_read_only_tools(
         ):
             initialized = await session.initialize()
             assert initialized.serverInfo.name == "1C Element"
-            assert initialized.serverInfo.version == "0.12.0"
+            assert initialized.serverInfo.version == "0.13.0"
             assert initialized.instructions is not None
             assert "first call\nget_documentation_status" in initialized.instructions
             assert "Never call start_documentation_build without that consent" in initialized.instructions
@@ -50,6 +50,8 @@ def test_stdio_server_exposes_read_only_tools(
             assert "Use lookup_symbol for declarations" in initialized.instructions
             assert "first call get_language_server_status" in initialized.instructions
             assert "If exact tools report a lexical fallback" in initialized.instructions
+            assert "call get_current_application" in initialized.instructions
+            assert "Do not infer\na current application in ordinary VS Code" in initialized.instructions
             tools = await session.list_tools()
             names = {tool.name for tool in tools.tools}
             assert names == {
@@ -61,6 +63,7 @@ def test_stdio_server_exposes_read_only_tools(
                 "get_corpus_info",
                 "get_console_project",
                 "get_console_status",
+                "get_current_application",
                 "get_document",
                 "get_documentation_build_status",
                 "get_documentation_status",
@@ -87,6 +90,7 @@ def test_stdio_server_exposes_read_only_tools(
                 "get_corpus_info",
                 "get_console_project",
                 "get_console_status",
+                "get_current_application",
                 "get_document",
                 "get_documentation_build_status",
                 "get_documentation_status",
@@ -118,6 +122,7 @@ def test_stdio_server_exposes_read_only_tools(
             assert "YAML entities" in (descriptions["list_project_elements"] or "")
             assert "relative path" in (descriptions["read_project_file"] or "")
             assert "current IDE project" in (descriptions["list_space_projects"] or "")
+            assert "exact published application" in (descriptions["get_current_application"] or "")
             assert "bounded local workspace candidates" in (descriptions["match_console_project"] or "")
             assert "lexical ambiguity" in (descriptions["lookup_symbol"] or "")
             assert "compiler-level" in (descriptions["find_references"] or "")
@@ -158,6 +163,11 @@ def test_stdio_server_exposes_read_only_tools(
             assert console.isError is False
             assert console.structuredContent is not None
             assert console.structuredContent["status"] == "missing"
+
+            application = await session.call_tool("get_current_application", {})
+            assert application.isError is False
+            assert application.structuredContent is not None
+            assert application.structuredContent["status"] == "not_available"
 
     asyncio.run(exercise_server())
 

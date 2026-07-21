@@ -45,7 +45,7 @@ def test_ui_reports_running_server_and_protects_mutations(tmp_path: Path) -> Non
 
         status = client.get("/api/status")
         assert status.status_code == 200
-        assert status.json()["server"] == {"state": "running", "version": "0.12.0"}
+        assert status.json()["server"] == {"state": "running", "version": "0.13.0"}
 
         assert client.post("/api/updates/check").status_code == 403
         token = re.search(r'name="element-mcp-token" content="([^"]+)"', page.text).group(1)  # type: ignore[union-attr]
@@ -124,6 +124,7 @@ def test_ui_accepts_verified_ide_handoff_without_returning_secret(
             "client_id": "ide-client",
             "client_secret": "ide-secret",
             "project_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "application_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
             "workspace_folders": [str(element_project_path)],
             "git_status": {
                 "commitId": "abc123",
@@ -147,6 +148,7 @@ def test_ui_accepts_verified_ide_handoff_without_returning_secret(
         assert response.json()["workspace"]["git"]["source"] == "g5rt.team.status"
         assert "ide-secret" not in response.text
         assert captured["client_secret"] == "ide-secret"
+        assert captured["application_id"] == "cccccccc-cccc-cccc-cccc-cccccccccccc"
 
         unavailable_workspace = client.post(
             "/api/integrations/element-console",
