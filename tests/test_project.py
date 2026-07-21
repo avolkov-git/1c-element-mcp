@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,7 @@ def test_project_status_is_missing_before_connection(tmp_path: Path) -> None:
         "status": "missing",
         "message": "Проект 1С:Предприятие.Элемент не подключён",
         "path": None,
+        "source": None,
     }
 
 
@@ -123,6 +125,127 @@ def test_connect_rejects_a_regular_directory(tmp_path: Path) -> None:
 
     with pytest.raises(ProjectError, match="Project.yaml"):
         service(tmp_path).connect(directory)
+
+
+def test_ide_workspace_uses_official_git_context_and_requires_project_selection(
+    tmp_path: Path,
+    element_project_path: Path,
+) -> None:
+    workspace = tmp_path / "repository"
+    first = workspace / "ActiveDirectory"
+    second = workspace / "ActiveDirectoryTestApp"
+    shutil.copytree(element_project_path, first)
+    shutil.copytree(element_project_path, second)
+    (first / "Project.yaml").write_text("Id: 1\nName: ActiveDirectory\n", encoding="utf-8")
+    (second / "Project.yaml").write_text("Id: 2\nName: ActiveDirectoryTestApp\n", encoding="utf-8")
+    project = service(tmp_path)
+
+    prepared = project.prepare_ide_workspace(
+        {
+            "workspace_folders": [str(workspace)],
+            "project_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "git_status": {
+                "commitId": "abc123",
+                "branchName": "main",
+                "modified": False,
+                "aheadBehind": {"ahead": 1, "behind": 2},
+                "commandStatus": "noConflict",
+                "currentHead": "abc123",
+                "commitMessage": "Не передавать это поле агенту",
+            },
+        }
+    )
+    context = project.activate_ide_workspace(prepared)
+    status = project.project_status()
+
+    assert status["status"] == "selection_required"
+    assert [item["project"]["name"] for item in context["candidates"]] == [
+        "ActiveDirectory",
+        "ActiveDirectoryTestApp",
+    ]
+    assert context["git"] == {
+        "source": "g5rt.team.status",
+        "commit_id": "abc123",
+        "branch_name": "main",
+        "command_status": "noConflict",
+        "current_head": "abc123",
+        "modified": False,
+        "ahead_behind": {"ahead": 1, "behind": 2},
+    }
+    assert "commitMessage" not in str(context)
+
+    connected = project.connect(first)
+    assert connected["source"] == "ide_session"
+    assert project.configuration.active_project_path() is None
+    assert project.project_status()["path"] == str(first.resolve())
+
+    refreshed = project.prepare_ide_workspace(
+        {
+            "workspace_folders": [str(workspace)],
+            "project_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "git_status": {"branchName": "feature", "modified": True},
+        }
+    )
+    project.activate_ide_workspace(refreshed)
+    assert project.project_status()["path"] == str(first.resolve())
+    assert project.project_status()["ide_context"]["git"]["branch_name"] == "feature"
+
+    project.clear_ide_workspace()
+    assert project.project_status()["status"] == "missing"
+
+
+def test_ide_workspace_auto_selects_sole_project_and_matches_console(
+    tmp_path: Path,
+    element_project_path: Path,
+) -> None:
+    workspace = tmp_path / "repository"
+    local_project = workspace / "ExampleProject"
+    shutil.copytree(element_project_path, local_project)
+    project = service(tmp_path)
+    project.activate_ide_workspace(
+        project.prepare_ide_workspace(
+            {
+                "workspace_folders": [str(workspace)],
+                "project_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            }
+        )
+    )
+
+    status = project.project_status()
+    match = project.match_console_project(
+        {
+            "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "name": "ExampleProject",
+            "presentation": "Example project",
+            "code": "example",
+        }
+    )
+
+    assert status["status"] == "ready"
+    assert status["source"] == "ide_session"
+    assert match["status"] == "ready"
+    assert match["confirmation_required"] is False
+    assert match["match_reason"] == "ide_session_selection"
+
+
+def test_console_name_match_is_only_a_confirmation_suggestion(
+    tmp_path: Path,
+    element_project_path: Path,
+) -> None:
+    workspace = tmp_path / "repository"
+    local_project = workspace / "ExampleProject"
+    shutil.copytree(element_project_path, local_project)
+    project = service(tmp_path)
+
+    match = project.match_console_project(
+        {"id": "project-id", "name": "ExampleProject", "presentation": "Example project", "code": "example"},
+        workspace,
+    )
+
+    assert match["status"] == "confirmation_required"
+    assert match["match_reason"] == "exact_name"
+    assert match["suggestion"]["path"] == str(local_project.resolve())
+    assert project.project_status()["status"] == "missing"
 
 
 def test_russian_development_language_filenames_are_supported(tmp_path: Path) -> None:

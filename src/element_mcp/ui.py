@@ -11,6 +11,7 @@ from starlette.responses import HTMLResponse, JSONResponse, Response
 
 from element_mcp.config import ServerSettings
 from element_mcp.console import ConsoleConfigurationError, ConsoleRequestError, ConsoleService
+from element_mcp.project import ProjectError, ProjectService
 from element_mcp.updates import UpdateError, UpdateService
 
 
@@ -18,7 +19,13 @@ def _asset(name: str) -> str:
     return resources.files("element_mcp").joinpath("ui_assets", name).read_text(encoding="utf-8")
 
 
-def register_ui(server, settings: ServerSettings, updates: UpdateService, console: ConsoleService) -> None:
+def register_ui(
+    server,
+    settings: ServerSettings,
+    updates: UpdateService,
+    console: ConsoleService,
+    project: ProjectService,
+) -> None:
     allowed_hosts = {"127.0.0.1", "localhost", "::1", settings.host.lower()}
 
     def host_allowed(request: Request) -> bool:
@@ -172,7 +179,13 @@ def register_ui(server, settings: ServerSettings, updates: UpdateService, consol
         if not mutation_allowed(request):
             return JSONResponse({"message": "Недопустимый локальный запрос"}, status_code=403)
         if request.method == "DELETE":
-            return JSONResponse(console.clear_ide_session(), headers={"Cache-Control": "no-store"})
+            return JSONResponse(
+                {
+                    "console": console.clear_ide_session(),
+                    "workspace": project.clear_ide_workspace(),
+                },
+                headers={"Cache-Control": "no-store"},
+            )
         try:
             content_length = int(request.headers.get("content-length", "0") or 0)
         except ValueError:
@@ -195,4 +208,18 @@ def register_ui(server, settings: ServerSettings, updates: UpdateService, consol
                 {"status": "rejected", "http_status": error.status_code, "message": str(error)},
                 status_code=status_code,
             )
-        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+        workspace = None
+        if "workspace_folders" in payload:
+            try:
+                prepared_workspace = await anyio.to_thread.run_sync(project.prepare_ide_workspace, payload)
+                workspace = project.activate_ide_workspace(prepared_workspace)
+            except ProjectError as error:
+                workspace = {
+                    "status": "invalid",
+                    "message": str(error),
+                    "source": "ide_session",
+                }
+        return JSONResponse(
+            {**result, **({"workspace": workspace} if workspace is not None else {})},
+            headers={"Cache-Control": "no-store"},
+        )

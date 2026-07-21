@@ -83,9 +83,12 @@ local MCP UI, or an explicitly selected Element/VS Code settings file. Never ask
 an access token into chat or a tool argument, and never expose credentials in an answer. If the status is missing,
 explain the supported configuration sources. If it is unauthenticated or forbidden, distinguish the authorization
 failure from an empty project list. Use list_console_spaces when the space is ambiguous. Use list_space_projects
-for the catalog and get_console_project for one project. In an Element IDE context, omit space_id first: the server can
-derive it from 1C.projectId. Console metadata does not grant filesystem access; use connect_project only after the
-user confirms the local checkout path.
+for the catalog and get_console_project for one project. In an Element IDE context, omit space_id first: the server
+can derive it from 1C.projectId. To associate Console metadata with local source, call match_console_project. In
+Element IDE it uses the workspace and Git status supplied by the official g5rt.team.status command. In VS Code,
+omit workspace_path only for stdio launched from the workspace; otherwise pass a user-confirmed local workspace.
+An exact name is only a suggestion, not proof. Call connect_project only after the user confirms a candidate, unless
+get_project_status already reports that the sole IDE project was selected automatically.
 """.strip()
 
 
@@ -107,7 +110,7 @@ def create_server(settings: ServerSettings) -> FastMCP:
     # FastMCP 1.x does not expose the low-level server version in its constructor.
     # Without this assignment clients would see the SDK version instead of our SemVer.
     server._mcp_server.version = __version__
-    register_ui(server, settings, updates, console)
+    register_ui(server, settings, updates, console, project)
 
     @server.tool(annotations=READ_ONLY, structured_output=True)
     def get_corpus_info() -> dict[str, Any]:
@@ -150,6 +153,17 @@ def create_server(settings: ServerSettings) -> FastMCP:
     ) -> dict[str, Any]:
         """Read one Console project; omit project_id to use 1C.projectId from the IDE context."""
         return console.get_project(project_id)
+
+    @server.tool(annotations=EXTERNAL_READ_ONLY, structured_output=True)
+    def match_console_project(
+        project_id: Annotated[str | None, Field(max_length=64)] = None,
+        workspace_path: Annotated[str | None, Field(max_length=4096)] = None,
+    ) -> dict[str, Any]:
+        """Match a Console project to bounded local workspace candidates without connecting or modifying them."""
+        console_result = console.get_project(project_id)
+        if console_result.get("status") != "ready":
+            return console_result
+        return project.match_console_project(console_result["project"], workspace_path)
 
     @server.tool(annotations=LOCAL_IDEMPOTENT_WRITE, structured_output=True)
     def connect_project(

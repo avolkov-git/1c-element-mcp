@@ -34,7 +34,7 @@ def test_stdio_server_exposes_read_only_tools(
         ):
             initialized = await session.initialize()
             assert initialized.serverInfo.name == "1C Element"
-            assert initialized.serverInfo.version == "0.11.0"
+            assert initialized.serverInfo.version == "0.12.0"
             assert initialized.instructions is not None
             assert "first call\nget_documentation_status" in initialized.instructions
             assert "Never call start_documentation_build without that consent" in initialized.instructions
@@ -76,6 +76,7 @@ def test_stdio_server_exposes_read_only_tools(
                 "list_project_elements",
                 "list_console_spaces",
                 "list_space_projects",
+                "match_console_project",
                 "read_project_file",
                 "search_docs",
                 "search_project_code",
@@ -101,6 +102,7 @@ def test_stdio_server_exposes_read_only_tools(
                 "list_project_elements",
                 "list_console_spaces",
                 "list_space_projects",
+                "match_console_project",
                 "read_project_file",
                 "search_docs",
                 "search_project_code",
@@ -116,6 +118,7 @@ def test_stdio_server_exposes_read_only_tools(
             assert "YAML entities" in (descriptions["list_project_elements"] or "")
             assert "relative path" in (descriptions["read_project_file"] or "")
             assert "current IDE project" in (descriptions["list_space_projects"] or "")
+            assert "bounded local workspace candidates" in (descriptions["match_console_project"] or "")
             assert "lexical ambiguity" in (descriptions["lookup_symbol"] or "")
             assert "compiler-level" in (descriptions["find_references"] or "")
             assert "Element LSP" in (descriptions["get_definition"] or "")

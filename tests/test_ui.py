@@ -45,7 +45,7 @@ def test_ui_reports_running_server_and_protects_mutations(tmp_path: Path) -> Non
 
         status = client.get("/api/status")
         assert status.status_code == 200
-        assert status.json()["server"] == {"state": "running", "version": "0.11.0"}
+        assert status.json()["server"] == {"state": "running", "version": "0.12.0"}
 
         assert client.post("/api/updates/check").status_code == 403
         token = re.search(r'name="element-mcp-token" content="([^"]+)"', page.text).group(1)  # type: ignore[union-attr]
@@ -102,6 +102,7 @@ def test_ui_rejects_unexpected_host_header(tmp_path: Path) -> None:
 def test_ui_accepts_verified_ide_handoff_without_returning_secret(
     tmp_path: Path,
     monkeypatch,
+    element_project_path: Path,
 ) -> None:
     captured: dict[str, object] = {}
 
@@ -122,6 +123,14 @@ def test_ui_accepts_verified_ide_handoff_without_returning_secret(
             "server": "https://element.example/console",
             "client_id": "ide-client",
             "client_secret": "ide-secret",
+            "project_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "workspace_folders": [str(element_project_path)],
+            "git_status": {
+                "commitId": "abc123",
+                "branchName": "main",
+                "modified": False,
+                "commandStatus": "noConflict",
+            },
         }
         assert client.post("/api/integrations/element-console", json=payload).status_code == 403
 
@@ -133,8 +142,20 @@ def test_ui_accepts_verified_ide_handoff_without_returning_secret(
 
         assert response.status_code == 200
         assert response.json()["connection"]["source"] == "ide_session"
+        assert response.json()["workspace"]["status"] == "ready"
+        assert response.json()["workspace"]["selected_path"] == str(element_project_path.resolve())
+        assert response.json()["workspace"]["git"]["source"] == "g5rt.team.status"
         assert "ide-secret" not in response.text
         assert captured["client_secret"] == "ide-secret"
+
+        unavailable_workspace = client.post(
+            "/api/integrations/element-console",
+            json={**payload, "workspace_folders": [str(tmp_path / "missing-workspace")]},
+            headers={"X-Element-MCP-Token": token},
+        )
+        assert unavailable_workspace.status_code == 200
+        assert unavailable_workspace.json()["status"] == "ready"
+        assert unavailable_workspace.json()["workspace"]["status"] == "invalid"
 
 
 def test_ui_configures_and_disables_remote_element_without_returning_secret(
