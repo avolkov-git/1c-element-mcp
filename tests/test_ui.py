@@ -8,7 +8,7 @@ from pathlib import Path
 from starlette.testclient import TestClient
 
 from element_mcp.config import ServerSettings
-from element_mcp.console import ConsoleService
+from element_mcp.console import ConsoleHttpClient, ConsoleService
 from element_mcp.server import create_server
 
 
@@ -45,7 +45,7 @@ def test_ui_reports_running_server_and_protects_mutations(tmp_path: Path) -> Non
 
         status = client.get("/api/status")
         assert status.status_code == 200
-        assert status.json()["server"] == {"state": "running", "version": "0.10.0"}
+        assert status.json()["server"] == {"state": "running", "version": "0.11.0"}
 
         assert client.post("/api/updates/check").status_code == 403
         token = re.search(r'name="element-mcp-token" content="([^"]+)"', page.text).group(1)  # type: ignore[union-attr]
@@ -135,3 +135,62 @@ def test_ui_accepts_verified_ide_handoff_without_returning_secret(
         assert response.json()["connection"]["source"] == "ide_session"
         assert "ide-secret" not in response.text
         assert captured["client_secret"] == "ide-secret"
+
+
+def test_ui_configures_and_disables_remote_element_without_returning_secret(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def get(self, connection, path):
+        assert path == "/api/v2/spaces"
+        assert connection.client_secret == "remote-secret"
+        return [{"id": "11111111-1111-1111-1111-111111111111"}]
+
+    monkeypatch.setattr(ConsoleHttpClient, "get", get)
+    config_path = tmp_path / "config" / "config.json"
+    server = create_server(
+        ServerSettings(
+            data_path=tmp_path / "data",
+            config_path=config_path,
+            transport="streamable-http",
+            host="127.0.0.1",
+        )
+    )
+    with TestClient(server.streamable_http_app(), base_url="http://127.0.0.1") as client:
+        page = client.get("/")
+        assert "Удалённый сервер Element" in page.text
+        token = re.search(r'name="element-mcp-token" content="([^"]+)"', page.text).group(1)  # type: ignore[union-attr]
+
+        missing = client.get("/api/console/configuration")
+        assert missing.json()["status"] == "missing"
+        assert client.post("/api/console/configuration", json={"enabled": False}).status_code == 403
+
+        saved = client.post(
+            "/api/console/configuration",
+            json={
+                "enabled": True,
+                "server": "https://element.example/console/api/v2",
+                "client_id": "remote-client",
+                "client_secret": "remote-secret",
+            },
+            headers={"X-Element-MCP-Token": token},
+        )
+
+        assert saved.status_code == 200
+        assert saved.json()["status"] == "ready"
+        assert saved.json()["server"] == "https://element.example/console"
+        assert saved.json()["secret_present"] is True
+        assert "remote-secret" not in saved.text
+
+        public = client.get("/api/console/configuration")
+        assert public.json()["status"] == "enabled"
+        assert "remote-secret" not in public.text
+
+        disabled = client.post(
+            "/api/console/configuration",
+            json={"enabled": False},
+            headers={"X-Element-MCP-Token": token},
+        )
+        assert disabled.status_code == 200
+        assert disabled.json()["status"] == "disabled"
+        assert disabled.json()["secret_present"] is True

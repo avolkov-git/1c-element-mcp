@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import secrets
+from functools import partial
 from importlib import resources
 
 import anyio
@@ -115,6 +116,56 @@ def register_ui(server, settings: ServerSettings, updates: UpdateService, consol
         except UpdateError as error:
             return JSONResponse({"message": str(error)}, status_code=409)
         return JSONResponse(result, status_code=202, headers={"Cache-Control": "no-store"})
+
+    @server.custom_route("/api/console/configuration", methods=["GET", "POST"], include_in_schema=False)
+    async def configure_console_connection(request: Request) -> Response:
+        if request.method == "GET":
+            if not host_allowed(request):
+                return Response(status_code=403)
+            return JSONResponse(console.persistent_configuration(), headers={"Cache-Control": "no-store"})
+        if not mutation_allowed(request):
+            return JSONResponse({"message": "Недопустимый локальный запрос"}, status_code=403)
+        try:
+            content_length = int(request.headers.get("content-length", "0") or 0)
+        except ValueError:
+            return JSONResponse({"message": "Некорректная длина запроса"}, status_code=400)
+        if content_length <= 0 or content_length > 16 * 1024:
+            return JSONResponse({"message": "Некорректный размер настроек Console"}, status_code=413)
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"message": "Настройки Console должны быть JSON-объектом"}, status_code=400)
+        if not isinstance(payload, dict) or not isinstance(payload.get("enabled"), bool):
+            return JSONResponse({"message": "Поле enabled должно быть логическим"}, status_code=400)
+        try:
+            if not payload["enabled"]:
+                result = await anyio.to_thread.run_sync(console.disable_persistent_connection)
+            else:
+                server_url = payload.get("server")
+                client_id = payload.get("client_id")
+                client_secret = payload.get("client_secret")
+                if not isinstance(server_url, str) or not isinstance(client_id, str):
+                    raise ConsoleConfigurationError("Укажите адрес сервера Element и Client ID")
+                if client_secret is not None and not isinstance(client_secret, str):
+                    raise ConsoleConfigurationError("Client Secret должен быть строкой")
+                if max(len(server_url), len(client_id), len(client_secret or "")) > 8192:
+                    raise ConsoleConfigurationError("Одно из полей настроек слишком длинное")
+                operation = partial(
+                    console.configure_persistent_connection,
+                    server=server_url,
+                    client_id=client_id,
+                    client_secret=client_secret,
+                )
+                result = await anyio.to_thread.run_sync(operation)
+        except ConsoleConfigurationError as error:
+            return JSONResponse({"status": "invalid", "message": str(error)}, status_code=400)
+        except ConsoleRequestError as error:
+            status_code = error.status_code if error.status_code in {401, 403} else 502
+            return JSONResponse(
+                {"status": "rejected", "http_status": error.status_code, "message": str(error)},
+                status_code=status_code,
+            )
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
     @server.custom_route("/api/integrations/element-console", methods=["POST", "DELETE"], include_in_schema=False)
     async def configure_element_console(request: Request) -> Response:

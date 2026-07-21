@@ -47,6 +47,7 @@ finally {
 }
 
 $Configuration = [ordered]@{
+    enabled = $true
     server = $Server.Trim()
     client_id = $ClientId.Trim()
     client_secret_dpapi = $ProtectedSecret

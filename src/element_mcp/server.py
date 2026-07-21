@@ -78,12 +78,12 @@ If exact tools report a lexical fallback, say that the result is not compiler-pr
 replace compiler diagnostics.
 
 For questions about projects available through the Element Management Console, first call get_console_status.
-The Console connection is optional and must come from the MCP process environment, a configured console file, or
-an explicitly selected Element/VS Code settings file. Never ask the user to paste Client-Secret or an access token
-into chat or a tool argument, and never expose credentials in an answer. If the status is missing, explain the
-supported configuration sources. If it is unauthenticated or forbidden, distinguish the authorization failure
-from an empty project list. Use list_console_spaces when the space is ambiguous. Use list_space_projects for the
-catalog and get_console_project for one project. In an Element IDE context, omit space_id first: the server can
+The Console connection is optional and must come from the MCP process environment, a configured console file, the
+local MCP UI, or an explicitly selected Element/VS Code settings file. Never ask the user to paste Client-Secret or
+an access token into chat or a tool argument, and never expose credentials in an answer. If the status is missing,
+explain the supported configuration sources. If it is unauthenticated or forbidden, distinguish the authorization
+failure from an empty project list. Use list_console_spaces when the space is ambiguous. Use list_space_projects
+for the catalog and get_console_project for one project. In an Element IDE context, omit space_id first: the server can
 derive it from 1C.projectId. Console metadata does not grant filesystem access; use connect_project only after the
 user confirms the local checkout path.
 """.strip()

@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import base64
+import csv
 import hashlib
 import json
 import os
 import ssl
+import subprocess
 import threading
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -104,7 +107,9 @@ class ConsoleContextResolver:
 
         console_config = self.settings.resolved_console_config_path
         if console_config.is_file() and console_config != ide_settings:
-            candidates.append(("console_config", _read_settings_file(console_config)))
+            console_values = _read_settings_file(console_config)
+            if _parse_boolean(console_values.get("enabled", True), name="enabled"):
+                candidates.append(("console_config", console_values))
 
         if self.settings.transport == "stdio" and ide_settings is None:
             for path in self._workspace_settings_paths():
@@ -171,6 +176,10 @@ class ConsoleHttpClient:
     def get(self, connection: ConsoleConnection, path: str) -> Any:
         return self._authorized_request(connection, "GET", path)
 
+    def clear_tokens(self) -> None:
+        with self._lock:
+            self._tokens.clear()
+
     def _authorized_request(
         self,
         connection: ConsoleConnection,
@@ -209,7 +218,7 @@ class ConsoleHttpClient:
         if not connection.client_id or not connection.client_secret:
             raise ConsoleConfigurationError("Для client credentials нужны Client-Id и Client-Secret")
         basic = base64.b64encode(f"{connection.client_id}:{connection.client_secret}".encode()).decode("ascii")
-        payload = urllib.parse.urlencode({"grant_type": "client_credentials"}).encode("ascii")
+        payload = urllib.parse.urlencode({"grant_type": "CLIENT_CREDENTIALS"}).encode("ascii")
         response = self._request(
             connection,
             "POST",
@@ -241,14 +250,19 @@ class ConsoleHttpClient:
         if not path.startswith("/"):
             raise ValueError("Console API path must be absolute")
         context = _ssl_context(connection)
-        return self.requester(
-            method,
-            f"{connection.base_url}{path}",
-            {"Accept": "application/json", **headers},
-            body,
-            context,
-            self.timeout,
-        )
+        request_headers = {"Accept": "application/json", **headers}
+        try:
+            return self.requester(
+                method,
+                f"{connection.base_url}{path}",
+                request_headers,
+                body,
+                context,
+                self.timeout,
+            )
+        except ConsoleRequestError as error:
+            safe_message = _redact_connection_error(str(error), connection, request_headers)
+            raise ConsoleRequestError(safe_message, status_code=error.status_code) from error
 
 
 class ConsoleService:
@@ -291,6 +305,146 @@ class ConsoleService:
     def clear_ide_session(self) -> dict[str, Any]:
         self.session_store.clear()
         return {"status": "cleared", "message": "Временный контекст IDE отключён"}
+
+    def persistent_configuration(self) -> dict[str, Any]:
+        """Return editable standalone settings without decrypting or exposing a credential."""
+        path = self.resolver.settings.resolved_console_config_path
+        if not path.is_file():
+            return {
+                "status": "missing",
+                "configured": False,
+                "enabled": False,
+                "server": None,
+                "client_id": None,
+                "credential_kind": None,
+                "secret_present": False,
+                "secret_storage": None,
+                "message": "Удалённый сервер Element не настроен",
+            }
+        try:
+            values = _read_settings_file(path)
+            enabled = _parse_boolean(values.get("enabled", True), name="enabled")
+            raw_server = _first_string(values, "server", "console_url", "base_url")
+            server = _normalize_base_url(raw_server) if raw_server else None
+            client_id = _first_string(values, "client_id", "client-id")
+        except ConsoleConfigurationError as error:
+            return {
+                "status": "invalid",
+                "configured": False,
+                "enabled": False,
+                "server": None,
+                "client_id": None,
+                "credential_kind": None,
+                "secret_present": False,
+                "secret_storage": None,
+                "message": str(error),
+            }
+        secret_storage = None
+        if _first_string(values, "client_secret_dpapi", "client-secret-dpapi"):
+            secret_storage = "windows_dpapi"
+        elif _first_string(values, "client_secret", "client-secret"):
+            secret_storage = "restricted_file"
+        access_token_present = bool(_first_string(values, "access_token", "id_token", "token"))
+        credential_kind = "access_token" if access_token_present else "client_credentials"
+        configured = bool(server and (access_token_present or (client_id and secret_storage)))
+        return {
+            "status": "enabled" if enabled else "disabled",
+            "configured": configured,
+            "enabled": enabled,
+            "server": server,
+            "client_id": client_id,
+            "credential_kind": credential_kind if configured else None,
+            "secret_present": secret_storage is not None,
+            "secret_storage": secret_storage,
+            "message": (
+                "Удалённый сервер Element включён"
+                if enabled
+                else "Удалённый сервер Element отключён; настройки сохранены"
+            ),
+        }
+
+    def configure_persistent_connection(
+        self,
+        *,
+        server: str,
+        client_id: str,
+        client_secret: str | None,
+    ) -> dict[str, Any]:
+        """Validate client credentials and persist them outside the main MCP configuration."""
+        normalized_server = _normalize_base_url(server)
+        normalized_client_id = client_id.strip()
+        if not normalized_client_id:
+            raise ConsoleConfigurationError("Укажите Client ID")
+
+        path = self.resolver.settings.resolved_console_config_path
+        supplied_secret = client_secret.strip() if isinstance(client_secret, str) else ""
+        try:
+            existing = _read_settings_file(path) if path.is_file() else {}
+        except ConsoleConfigurationError:
+            if not supplied_secret:
+                raise
+            existing = {}
+        candidate = {
+            "server": normalized_server,
+            "client_id": normalized_client_id,
+            "verify_tls": existing.get("verify_tls", existing.get("verify-tls", True)),
+        }
+        for key in ("ca_bundle", "ca-bundle", "project_id", "project-id", "space_id", "space-id"):
+            if key in existing:
+                candidate[key] = existing[key]
+
+        if supplied_secret:
+            candidate["client_secret"] = supplied_secret
+        else:
+            existing_server = _first_string(existing, "server", "console_url", "base_url")
+            existing_client_id = _first_string(existing, "client_id", "client-id")
+            same_identity = (
+                bool(existing_server)
+                and _normalize_base_url(existing_server) == normalized_server
+                and existing_client_id == normalized_client_id
+            )
+            if not same_identity:
+                raise ConsoleConfigurationError("Введите Client Secret для нового сервера или Client ID")
+            for key in ("client_secret_dpapi", "client-secret-dpapi", "client_secret", "client-secret"):
+                if key in existing:
+                    candidate[key] = existing[key]
+                    break
+
+        connection = _connection_from_values(candidate, source="console_config")
+        self.client.clear_tokens()
+        spaces = _as_items(self.client.get(connection, "/api/v2/spaces"), resource="пространств")
+
+        stored = {
+            key: value
+            for key, value in candidate.items()
+            if key not in {"client_secret", "client-secret", "client_secret_dpapi", "client-secret-dpapi"}
+        }
+        stored["enabled"] = True
+        if supplied_secret:
+            secret_key, protected_secret = _protect_secret_for_storage(supplied_secret)
+            stored[secret_key] = protected_secret
+        else:
+            for key in ("client_secret_dpapi", "client-secret-dpapi", "client_secret", "client-secret"):
+                if key in candidate:
+                    stored[key] = candidate[key]
+                    break
+        _write_console_settings(path, stored)
+        return {
+            **self.persistent_configuration(),
+            "status": "ready",
+            "spaces_count": len(spaces),
+            "message": "Подключение проверено и включено",
+        }
+
+    def disable_persistent_connection(self) -> dict[str, Any]:
+        path = self.resolver.settings.resolved_console_config_path
+        if not path.is_file():
+            return self.persistent_configuration()
+        values = _read_settings_file(path)
+        values["enabled"] = False
+        _write_console_settings(path, values)
+        self.client.clear_tokens()
+        return self.persistent_configuration()
 
     def status(self) -> dict[str, Any]:
         try:
@@ -575,6 +729,101 @@ def _unprotect_windows_secret(value: str) -> str:
     return secret
 
 
+def _protect_secret_for_storage(value: str) -> tuple[str, str]:
+    if os.name == "nt":
+        return "client_secret_dpapi", _protect_windows_secret(value)
+    return "client_secret", value
+
+
+def _protect_windows_secret(value: str) -> str:
+    if os.name != "nt":
+        raise ConsoleConfigurationError("DPAPI-секрет можно создать только на Windows")
+    import ctypes
+    from ctypes import wintypes
+
+    class DataBlob(ctypes.Structure):
+        _fields_ = [("size", wintypes.DWORD), ("data", ctypes.POINTER(ctypes.c_byte))]
+
+    encoded = value.encode("utf-8")
+    encoded_buffer = ctypes.create_string_buffer(encoded)
+    input_blob = DataBlob(len(encoded), ctypes.cast(encoded_buffer, ctypes.POINTER(ctypes.c_byte)))
+    output_blob = DataBlob()
+    crypt32 = ctypes.windll.crypt32
+    kernel32 = ctypes.windll.kernel32
+    kernel32.LocalFree.argtypes = [wintypes.HLOCAL]
+    kernel32.LocalFree.restype = wintypes.HLOCAL
+    cryptprotect_local_machine = 0x4
+    if not crypt32.CryptProtectData(
+        ctypes.byref(input_blob),
+        None,
+        None,
+        None,
+        None,
+        cryptprotect_local_machine,
+        ctypes.byref(output_blob),
+    ):
+        raise ConsoleConfigurationError("Windows DPAPI не смог защитить Client Secret")
+    try:
+        protected = ctypes.string_at(output_blob.data, output_blob.size)
+    finally:
+        kernel32.LocalFree(ctypes.cast(output_blob.data, wintypes.HLOCAL))
+    return base64.b64encode(protected).decode("ascii")
+
+
+def _write_console_settings(path: Path, values: Mapping[str, Any]) -> None:
+    resolved = path.expanduser().resolve()
+    temporary = resolved.with_suffix(resolved.suffix + ".tmp")
+    try:
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(
+            json.dumps(dict(values), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        if os.name == "nt":
+            current_sid = _current_windows_sid()
+            completed = subprocess.run(
+                [
+                    "icacls.exe",
+                    str(temporary),
+                    "/inheritance:r",
+                    "/grant:r",
+                    "*S-1-5-18:(R)",
+                    "*S-1-5-32-544:(F)",
+                    f"*{current_sid}:(F)",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            if completed.returncode != 0:
+                raise ConsoleConfigurationError("Не удалось ограничить доступ к файлу настроек Console")
+        else:
+            temporary.chmod(0o600)
+        temporary.replace(resolved)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ConsoleConfigurationError(f"Не удалось сохранить настройки Console: {error}") from error
+    finally:
+        if temporary.exists():
+            with suppress(OSError):
+                temporary.unlink()
+
+
+def _current_windows_sid() -> str:
+    completed = subprocess.run(
+        ["whoami.exe", "/user", "/fo", "csv", "/nh"],
+        check=False,
+        capture_output=True,
+        text=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if completed.returncode == 0:
+        rows = list(csv.reader(completed.stdout.splitlines()))
+        if rows and len(rows[0]) >= 2 and rows[0][1].startswith("S-"):
+            return rows[0][1]
+    raise ConsoleConfigurationError("Не удалось определить Windows SID учётной записи MCP")
+
+
 def _normalize_base_url(value: str) -> str:
     parsed = urllib.parse.urlsplit(value.strip())
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -741,6 +990,24 @@ def _connection_fingerprint(connection: ConsoleConnection) -> str:
         )
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _redact_connection_error(
+    message: str,
+    connection: ConsoleConnection,
+    headers: Mapping[str, str],
+) -> str:
+    sensitive = [connection.client_secret, connection.access_token]
+    authorization = headers.get("Authorization")
+    if authorization:
+        sensitive.append(authorization)
+        _, _, credential = authorization.partition(" ")
+        sensitive.append(credential)
+    result = message
+    for value in sensitive:
+        if value:
+            result = result.replace(value, "[скрыто]")
+    return result[:500]
 
 
 def _validate_uuid(value: str, name: str) -> str:

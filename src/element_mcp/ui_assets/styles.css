@@ -61,6 +61,7 @@ select {
 .runtime-status,
 .metadata,
 .source-settings,
+.console-settings,
 .update-area {
   padding-inline: clamp(24px, 6vw, 40px);
 }
@@ -184,18 +185,21 @@ h1 {
   color: var(--primary-hover);
 }
 
-.source-settings {
+.source-settings,
+.console-settings {
   padding-block: 24px;
   border-top: 1px solid var(--border);
 }
 
-.source-settings label {
+.source-settings label,
+.console-settings fieldset > label {
   display: block;
   margin-bottom: 8px;
   font-weight: 650;
 }
 
-.source-settings input {
+.source-settings input,
+.console-settings fieldset > input {
   width: 100%;
   min-height: 48px;
   padding: 11px 12px;
@@ -208,16 +212,19 @@ h1 {
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 
-.source-settings input::placeholder {
+.source-settings input::placeholder,
+.console-settings fieldset > input::placeholder {
   color: var(--muted);
   opacity: 1;
 }
 
-.source-settings input[aria-invalid="true"] {
+.source-settings input[aria-invalid="true"],
+.console-settings input[aria-invalid="true"] {
   border-color: var(--danger);
 }
 
 .source-help,
+.settings-help,
 .source-feedback,
 .source-error {
   margin-top: 8px;
@@ -225,7 +232,8 @@ h1 {
   text-wrap: pretty;
 }
 
-.source-help {
+.source-help,
+.settings-help {
   color: var(--muted);
 }
 
@@ -237,7 +245,8 @@ h1 {
   color: var(--success);
 }
 
-.source-help code {
+.source-help code,
+.settings-help code {
   color: inherit;
   font-family: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, monospace;
 }
@@ -261,6 +270,87 @@ h1 {
 .secondary-action:disabled {
   cursor: default;
   opacity: 0.55;
+}
+
+.settings-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.settings-heading h2 {
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.4;
+}
+
+.settings-heading p {
+  max-width: 42ch;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 0.875rem;
+  text-wrap: pretty;
+}
+
+.switch-label {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  margin: -10px -8px 0 0;
+  padding: 8px;
+  cursor: pointer;
+  color: var(--ink);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.switch-label input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.console-settings fieldset {
+  min-width: 0;
+  margin: 20px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.console-settings fieldset > label:not(:first-child) {
+  margin-top: 18px;
+}
+
+.settings-action {
+  min-height: 44px;
+  margin-top: 18px;
+  padding: 10px 14px;
+  cursor: pointer;
+  border: 1px solid var(--primary);
+  border-radius: 10px;
+  color: var(--primary);
+  background: transparent;
+  font-weight: 650;
+  transition: color 160ms ease, background-color 160ms ease, transform 120ms var(--ease-out), opacity 160ms ease;
+}
+
+.settings-action:hover:not(:disabled) {
+  color: var(--primary-ink);
+  background: var(--primary);
+}
+
+.settings-action:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.settings-action:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 
 .update-area {
@@ -303,12 +393,16 @@ h1 {
 
 .text-action:focus-visible,
 .secondary-action:focus-visible,
-.source-settings input:focus-visible {
+.settings-action:focus-visible,
+.switch-label input:focus-visible,
+.source-settings input:focus-visible,
+.console-settings input:focus-visible {
   outline: 3px solid color-mix(in oklch, var(--focus), transparent 35%);
   outline-offset: 2px;
 }
 
-.source-settings input:focus-visible {
+.source-settings input:focus-visible,
+.console-settings fieldset > input:focus-visible {
   border-color: var(--focus);
 }
 
@@ -342,6 +436,7 @@ h1 {
   .runtime-status,
   .metadata,
   .source-settings,
+  .console-settings,
   .update-area {
     padding-inline: 22px;
   }
@@ -357,6 +452,14 @@ h1 {
 
   .source-value {
     align-items: flex-start;
+  }
+
+  .settings-heading {
+    display: block;
+  }
+
+  .switch-label {
+    margin: 12px 0 -8px -8px;
   }
 
   .text-action {
@@ -389,6 +492,10 @@ h1 {
   }
 
   #update-action:active:not(:disabled) {
+    transform: none;
+  }
+
+  .settings-action:active:not(:disabled) {
     transform: none;
   }
 }

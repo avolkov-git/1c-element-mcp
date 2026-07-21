@@ -43,6 +43,19 @@
               >Изменить</button>
             </dd>
           </div>
+          <div class="metadata-row">
+            <dt>Панель управления</dt>
+            <dd class="source-value">
+              <span id="console-summary">—</span>
+              <button
+                id="console-toggle"
+                class="text-action"
+                type="button"
+                aria-expanded="false"
+                aria-controls="console-settings"
+              >Настроить</button>
+            </dd>
+          </div>
         </dl>
 
         <form id="source-settings" class="source-settings" hidden novalidate>
@@ -66,6 +79,68 @@
           <button id="source-use-origin" class="secondary-action" type="button">
             Переключиться на удалённый origin
           </button>
+        </form>
+
+        <form id="console-settings" class="console-settings" hidden novalidate>
+          <div class="settings-heading">
+            <div>
+              <h2>Удалённый сервер Element</h2>
+              <p>Нужен для доступа к Панели управления из VS Code или другого внешнего клиента.</p>
+            </div>
+            <label class="switch-label" for="console-enabled">
+              <input id="console-enabled" name="console-enabled" type="checkbox" role="switch">
+              <span>Использовать</span>
+            </label>
+          </div>
+
+          <fieldset id="console-fields" hidden>
+            <label for="console-server">HTTP-адрес сервера Element</label>
+            <input
+              id="console-server"
+              name="console-server"
+              type="url"
+              maxlength="2048"
+              autocomplete="url"
+              spellcheck="false"
+              placeholder="https://element.example/console"
+              aria-describedby="console-server-help console-error"
+            >
+            <p id="console-server-help" class="settings-help">
+              Укажите базовый адрес Console, обычно он заканчивается на <code>/console</code>.
+              Полный путь <code>/console/api/v2</code> тоже подойдёт.
+            </p>
+
+            <label for="console-client-id">Client ID</label>
+            <input
+              id="console-client-id"
+              name="console-client-id"
+              type="text"
+              maxlength="2048"
+              autocomplete="username"
+              spellcheck="false"
+              aria-describedby="console-error"
+            >
+
+            <label for="console-client-secret">Client Secret</label>
+            <input
+              id="console-client-secret"
+              name="console-client-secret"
+              type="password"
+              maxlength="8192"
+              autocomplete="new-password"
+              spellcheck="false"
+              aria-describedby="console-secret-help console-error"
+            >
+            <p id="console-secret-help" class="settings-help">
+              Секрет не возвращается в браузер или агенту после сохранения.
+            </p>
+
+            <p id="console-feedback" class="source-feedback" role="status" aria-live="polite" hidden></p>
+            <p id="console-error" class="source-error" role="alert" hidden></p>
+            <button id="console-save" class="settings-action" type="submit">
+              Проверить и сохранить
+            </button>
+          </fieldset>
         </form>
 
         <div class="update-area">

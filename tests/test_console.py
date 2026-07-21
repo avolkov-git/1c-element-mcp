@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import urllib.parse
+from base64 import b64encode
 from pathlib import Path
 from typing import Any
 
@@ -121,6 +123,11 @@ def test_default_console_config_is_next_to_main_config(tmp_path: Path) -> None:
     assert connection.source == "console_config"
     assert connection.auth_kind == "access_token"
 
+    public = ConsoleService(ServerSettings(config_path=main_config)).persistent_configuration()
+    assert public["configured"] is True
+    assert public["credential_kind"] == "access_token"
+    assert "short-lived-token" not in json.dumps(public)
+
 
 def test_stdio_discovers_workspace_settings_but_http_does_not(
     tmp_path: Path,
@@ -187,9 +194,9 @@ def test_client_credentials_token_is_cached_and_retried_once_after_401(tmp_path:
         calls.append({"method": method, "url": url, "headers": headers, "body": body})
         if url.endswith("/sys/token"):
             token_number += 1
-            assert urllib.parse.parse_qs((body or b"").decode()) == {"grant_type": ["client_credentials"]}
-            assert headers["Authorization"].startswith("Basic ")
-            return {"id_token": f"token-{token_number}"}
+            assert urllib.parse.parse_qs((body or b"").decode()) == {"grant_type": ["CLIENT_CREDENTIALS"]}
+            assert headers["Authorization"] == f"Basic {b64encode(b'client:secret').decode('ascii')}"
+            return {"id_token": f"token-{token_number}", "access_token": "Not implemented"}
         if headers["Authorization"] == "Bearer token-1":
             raise ConsoleRequestError("expired", status_code=401)
         return []
@@ -290,6 +297,31 @@ def test_console_status_distinguishes_forbidden_from_empty(tmp_path: Path) -> No
     assert result == {"status": "forbidden", "http_status": 403, "message": "Нет прав"}
 
 
+def test_console_errors_redact_credentials_and_authorization_header(tmp_path: Path) -> None:
+    def requester(method: str, url: str, headers: Any, body: bytes | None, context: Any, timeout: float) -> Any:
+        raise ConsoleRequestError(
+            f"Rejected secret-value and {headers['Authorization']}",
+            status_code=403,
+        )
+
+    resolver = ConsoleContextResolver(
+        ServerSettings(config_path=tmp_path / "config.json"),
+        environ={
+            "ELEMENT_CONSOLE_URL": "http://element.local/console",
+            "ELEMENT_CONSOLE_CLIENT_ID": "client",
+            "ELEMENT_CONSOLE_CLIENT_SECRET": "secret-value",
+        },
+    )
+    service = ConsoleService(resolver.settings, resolver=resolver, client=ConsoleHttpClient(requester=requester))
+
+    result = service.status()
+
+    assert result["status"] == "forbidden"
+    assert "secret-value" not in result["message"]
+    assert "Basic " not in result["message"]
+    assert "[скрыто]" in result["message"]
+
+
 def test_verified_ide_session_is_used_without_persisting_or_exposing_secret(tmp_path: Path) -> None:
     calls: list[str] = []
 
@@ -352,6 +384,79 @@ def test_rejected_ide_session_does_not_replace_existing_connection(tmp_path: Pat
         service.configure_ide_session({"server": "https://bad.example/console", "access_token": "bad-token"})
 
     assert service.status()["connection"]["base_url"] == "https://good.example/console"
+
+
+def test_persistent_connection_is_validated_saved_and_reversibly_disabled(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    def requester(method: str, url: str, headers: Any, body: bytes | None, context: Any, timeout: float) -> Any:
+        calls.append(url)
+        if url.endswith("/sys/token"):
+            return {"id_token": "standalone-token"}
+        if url.endswith("/api/v2/spaces"):
+            assert headers["Authorization"] == "Bearer standalone-token"
+            return [space_response(SPACE_ID, "Основное")]
+        raise AssertionError(url)
+
+    settings = ServerSettings(config_path=tmp_path / "config" / "config.json")
+    resolver = ConsoleContextResolver(settings, environ={})
+    service = ConsoleService(settings, resolver=resolver, client=ConsoleHttpClient(requester=requester))
+
+    result = service.configure_persistent_connection(
+        server="https://element.example/console/api/v2",
+        client_id="standalone-client",
+        client_secret="standalone-secret",
+    )
+
+    assert result["status"] == "ready"
+    assert result["server"] == "https://element.example/console"
+    assert result["client_id"] == "standalone-client"
+    assert result["secret_present"] is True
+    assert result["spaces_count"] == 1
+    assert "standalone-secret" not in json.dumps(result)
+
+    config_path = settings.resolved_console_config_path
+    stored = json.loads(config_path.read_text(encoding="utf-8"))
+    assert stored["enabled"] is True
+    if os.name == "nt":
+        assert "client_secret_dpapi" in stored
+        assert "standalone-secret" not in config_path.read_text(encoding="utf-8")
+    else:
+        assert stored["client_secret"] == "standalone-secret"
+        assert config_path.stat().st_mode & 0o777 == 0o600
+    assert service.status()["status"] == "ready"
+
+    disabled = service.disable_persistent_connection()
+    assert disabled["status"] == "disabled"
+    assert disabled["secret_present"] is True
+    with pytest.raises(ConsoleConfigurationError):
+        resolver.resolve()
+
+    enabled_again = service.configure_persistent_connection(
+        server="https://element.example/console",
+        client_id="standalone-client",
+        client_secret=None,
+    )
+    assert enabled_again["status"] == "ready"
+    assert len([url for url in calls if url.endswith("/api/v2/spaces")]) == 3
+
+
+def test_rejected_persistent_connection_is_not_saved(tmp_path: Path) -> None:
+    def requester(method: str, url: str, headers: Any, body: bytes | None, context: Any, timeout: float) -> Any:
+        raise ConsoleRequestError("Нет прав", status_code=403)
+
+    settings = ServerSettings(config_path=tmp_path / "config" / "config.json")
+    resolver = ConsoleContextResolver(settings, environ={})
+    service = ConsoleService(settings, resolver=resolver, client=ConsoleHttpClient(requester=requester))
+
+    with pytest.raises(ConsoleRequestError):
+        service.configure_persistent_connection(
+            server="https://element.example/console",
+            client_id="rejected-client",
+            client_secret="rejected-secret",
+        )
+
+    assert not settings.resolved_console_config_path.exists()
 
 
 def project_response(project_id: str, name: str, *, space_id: str, deleted: bool = False) -> dict[str, Any]:

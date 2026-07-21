@@ -14,7 +14,7 @@ The primary user is the owner or administrator of a 1C:Enterprise.Element server
 
 ## Product Purpose
 
-1C Element MCP gives AI agents local, version-aware access to Element documentation and, over time, project tooling. Its web surface exists to answer whether MCP is running, whether a safe update is available, and which trusted Git source supplies that update.
+1C Element MCP gives AI agents local, version-aware access to Element documentation, project tooling, and an optional remote Management Console. Its web surface exists to answer whether MCP is running, configure that remote connection without exposing credentials to the agent, and apply safe updates from a trusted Git source.
 
 ## Positioning
 
@@ -33,6 +33,7 @@ Avoid data-dense dashboards, terminal cosplay, oversized metrics, decorative gra
 - Status comes first and is stated in plain language.
 - One screen has one primary action.
 - Progressive disclosure keeps configuration out of the common path.
+- Remote Console access is optional, verified before activation, and reversible without re-entering its secret.
 - A user-selected local source turns checking and applying an update into one deliberate action.
 - Offline and closed-network states stay honest and actionable.
 - Familiar controls and immediate feedback build trust.

@@ -28,6 +28,7 @@ One responsive column capped near 560px. A single bordered surface groups the st
 - Operational status: static dot, heading, and explanatory sentence.
 - Metadata rows: current version and update source, with wrapping for long paths.
 - Update source editor: a progressively disclosed, explicitly labelled path field with inline validation. A changed path makes the primary action say “save and check”; returning to `origin` applies immediately with loading and completion feedback.
+- Remote Console editor: a progressively disclosed switch plus URL, Client ID, and password field. Enabling validates the credentials before persistence; disabling is immediate and keeps the protected secret for a reversible return. The saved secret is represented only by an empty field and explanatory placeholder.
 - Update state: an `aria-live` message with current, available, checking, applying, or unavailable copy.
 - Primary button: one 48px control whose label changes with context. It has hover, focus-visible, active, disabled, loading, success, and error states.
 

@@ -11,10 +11,24 @@ const sourceInput = document.querySelector("#source-path");
 const sourceFeedback = document.querySelector("#source-feedback");
 const sourceError = document.querySelector("#source-error");
 const sourceUseOrigin = document.querySelector("#source-use-origin");
+const consoleSummary = document.querySelector("#console-summary");
+const consoleToggle = document.querySelector("#console-toggle");
+const consoleSettings = document.querySelector("#console-settings");
+const consoleEnabled = document.querySelector("#console-enabled");
+const consoleFields = document.querySelector("#console-fields");
+const consoleServer = document.querySelector("#console-server");
+const consoleClientId = document.querySelector("#console-client-id");
+const consoleClientSecret = document.querySelector("#console-client-secret");
+const consoleSecretHelp = document.querySelector("#console-secret-help");
+const consoleFeedback = document.querySelector("#console-feedback");
+const consoleError = document.querySelector("#console-error");
+const consoleSave = document.querySelector("#console-save");
 
 let latestStatus = null;
 let initialVersion = null;
 let sourceDirty = false;
+let consoleConfiguration = null;
+let consoleBusy = false;
 
 function sleep(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
@@ -52,6 +66,128 @@ function showSourceFeedback(value, state = "") {
   sourceFeedback.textContent = value;
   sourceFeedback.hidden = !value;
   sourceFeedback.dataset.state = state;
+}
+
+function showConsoleError(value, invalidField = null) {
+  consoleError.textContent = value;
+  consoleError.hidden = !value;
+  for (const input of [consoleServer, consoleClientId, consoleClientSecret]) {
+    input.setAttribute("aria-invalid", input === invalidField ? "true" : "false");
+  }
+}
+
+function showConsoleFeedback(value, state = "") {
+  consoleFeedback.textContent = value;
+  consoleFeedback.hidden = !value;
+  consoleFeedback.dataset.state = state;
+}
+
+function setConsoleBusy(value, label = "") {
+  consoleBusy = value;
+  consoleEnabled.disabled = value;
+  consoleServer.disabled = value;
+  consoleClientId.disabled = value;
+  consoleClientSecret.disabled = value;
+  consoleSave.disabled = value;
+  if (label) consoleSave.textContent = label;
+}
+
+function renderConsoleConfiguration(payload) {
+  consoleConfiguration = payload;
+  consoleEnabled.checked = payload.enabled;
+  consoleSummary.textContent =
+    payload.status === "invalid"
+      ? "Нужна настройка"
+      : payload.configured
+        ? payload.enabled
+          ? payload.server
+          : "Отключена"
+        : "Не настроена";
+  consoleSummary.title = payload.server || "";
+  consoleServer.value = payload.server || "";
+  consoleClientId.value = payload.client_id || "";
+  consoleClientSecret.value = "";
+  consoleClientSecret.placeholder = payload.secret_present ? "Сохранён — оставьте пустым" : "";
+  consoleSecretHelp.textContent =
+    payload.credential_kind === "access_token"
+      ? "Текущая конфигурация использует готовый токен. Введите Client ID и Client Secret, чтобы перейти на автоматическое получение bearer."
+      : payload.secret_present
+        ? "Оставьте поле пустым, чтобы использовать сохранённый секрет. Он не возвращается в браузер или агенту."
+        : "Секрет не возвращается в браузер или агенту после сохранения.";
+  consoleFields.hidden = !payload.enabled;
+  consoleSave.textContent = payload.configured ? "Проверить и сохранить" : "Проверить и включить";
+  consoleToggle.textContent = consoleSettings.hidden ? "Настроить" : "Скрыть";
+}
+
+async function loadConsoleConfiguration() {
+  try {
+    renderConsoleConfiguration(await api("/api/console/configuration"));
+  } catch (error) {
+    consoleSummary.textContent = "Недоступна";
+    showConsoleError(error.message);
+  }
+}
+
+async function saveConsoleConnection() {
+  if (consoleBusy) return;
+  showConsoleError("");
+  showConsoleFeedback("Получаем токен и проверяем доступ к пространствам…", "loading");
+  setConsoleBusy(true, "Проверяем…");
+  try {
+    const payload = await api("/api/console/configuration", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        enabled: true,
+        server: consoleServer.value.trim(),
+        client_id: consoleClientId.value.trim(),
+        client_secret: consoleClientSecret.value || null,
+      }),
+    });
+    renderConsoleConfiguration(payload);
+    showConsoleFeedback(
+      `Подключение работает. Доступно пространств: ${payload.spaces_count}.`,
+      "success",
+    );
+  } catch (error) {
+    consoleEnabled.checked = Boolean(consoleConfiguration?.enabled);
+    consoleFields.hidden = false;
+    showConsoleFeedback("");
+    let invalidField = null;
+    if (!consoleServer.value.trim()) invalidField = consoleServer;
+    else if (!consoleClientId.value.trim()) invalidField = consoleClientId;
+    else if (!consoleClientSecret.value && !consoleConfiguration?.secret_present) invalidField = consoleClientSecret;
+    showConsoleError(error.message, invalidField);
+    if (invalidField) invalidField.focus();
+  } finally {
+    setConsoleBusy(false);
+    consoleSave.textContent = consoleConfiguration?.configured
+      ? "Проверить и сохранить"
+      : "Проверить и включить";
+  }
+}
+
+async function disableConsoleConnection() {
+  if (consoleBusy) return;
+  showConsoleError("");
+  showConsoleFeedback("Отключаем удалённый сервер…", "loading");
+  setConsoleBusy(true, "Проверить и сохранить");
+  try {
+    const payload = await api("/api/console/configuration", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: false }),
+    });
+    renderConsoleConfiguration(payload);
+    showConsoleFeedback("Удалённый сервер отключён. Настройки сохранены.", "success");
+  } catch (error) {
+    consoleEnabled.checked = true;
+    consoleFields.hidden = false;
+    showConsoleFeedback("");
+    showConsoleError(error.message);
+  } finally {
+    setConsoleBusy(false);
+  }
 }
 
 function setSourceEditor(updateSource) {
@@ -270,6 +406,44 @@ sourceSettings.addEventListener("submit", (event) => {
   event.preventDefault();
   checkUpdates(true);
 });
+
+consoleToggle.addEventListener("click", () => {
+  const open = consoleSettings.hidden;
+  consoleSettings.hidden = !open;
+  consoleToggle.setAttribute("aria-expanded", String(open));
+  consoleToggle.textContent = open ? "Скрыть" : "Настроить";
+  if (open) {
+    showConsoleError(consoleConfiguration?.status === "invalid" ? consoleConfiguration.message : "");
+    showConsoleFeedback("");
+    if (consoleEnabled.checked) consoleServer.focus();
+    else consoleEnabled.focus();
+  }
+});
+
+consoleEnabled.addEventListener("change", () => {
+  if (consoleEnabled.checked) {
+    consoleFields.hidden = false;
+    if (
+      consoleConfiguration?.configured &&
+      consoleConfiguration?.credential_kind === "client_credentials"
+    ) {
+      saveConsoleConnection();
+    } else {
+      showConsoleFeedback("Заполните адрес и учётные данные, затем проверьте подключение.", "pending");
+      consoleServer.focus();
+    }
+  } else {
+    consoleFields.hidden = true;
+    disableConsoleConnection();
+  }
+});
+
+consoleSettings.addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveConsoleConnection();
+});
+
+loadConsoleConfiguration();
 
 api("/api/status")
   .then((payload) => {
