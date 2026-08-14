@@ -31,6 +31,19 @@
             <dd id="server-version">—</dd>
           </div>
           <div class="metadata-row">
+            <dt>Документация</dt>
+            <dd class="source-value">
+              <span id="documentation-summary">—</span>
+              <button
+                id="documentation-toggle"
+                class="text-action"
+                type="button"
+                aria-expanded="false"
+                aria-controls="documentation-settings"
+              >Изменить</button>
+            </dd>
+          </div>
+          <div class="metadata-row">
             <dt>Источник обновлений</dt>
             <dd class="source-value">
               <span id="update-source">—</span>
@@ -57,6 +70,29 @@
             </dd>
           </div>
         </dl>
+
+        <form id="documentation-settings" class="documentation-settings" hidden novalidate>
+          <label for="documentation-path">Каталог нормализованной документации</label>
+          <input
+            id="documentation-path"
+            name="documentation-path"
+            type="text"
+            maxlength="4096"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="C:\ProgramData\1c-element-mcp\data\corpora\element-9.2.4-6"
+            aria-describedby="documentation-help documentation-feedback documentation-error"
+          >
+          <p id="documentation-help" class="settings-help">
+            Укажите корень готового корпуса с <code>manifest.json</code> и каталогами
+            <code>docs-lang</code>, <code>docs-console</code>, <code>docs-server</code>.
+          </p>
+          <p id="documentation-feedback" class="source-feedback" role="status" aria-live="polite" hidden></p>
+          <p id="documentation-error" class="source-error" role="alert" hidden></p>
+          <button id="documentation-activate" class="settings-action" type="submit">
+            Проверить и подключить
+          </button>
+        </form>
 
         <form id="source-settings" class="source-settings" hidden novalidate>
           <label for="source-path">Путь к локальному Git-каталогу</label>

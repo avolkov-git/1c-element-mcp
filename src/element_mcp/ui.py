@@ -4,13 +4,16 @@ import html
 import secrets
 from functools import partial
 from importlib import resources
+from pathlib import Path
 
 import anyio
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 
-from element_mcp.config import ServerSettings
+from element_mcp.config import ConfigurationError, ServerSettings
 from element_mcp.console import ConsoleConfigurationError, ConsoleRequestError, ConsoleService
+from element_mcp.corpus import CorpusError
+from element_mcp.documentation import DocumentationService
 from element_mcp.project import ProjectError, ProjectService
 from element_mcp.updates import UpdateError, UpdateService
 
@@ -23,6 +26,7 @@ def register_ui(
     server,
     settings: ServerSettings,
     updates: UpdateService,
+    documentation: DocumentationService,
     console: ConsoleService,
     project: ProjectService,
 ) -> None:
@@ -123,6 +127,52 @@ def register_ui(
         except UpdateError as error:
             return JSONResponse({"message": str(error)}, status_code=409)
         return JSONResponse(result, status_code=202, headers={"Cache-Control": "no-store"})
+
+    @server.custom_route("/api/documentation", methods=["GET"], include_in_schema=False)
+    async def documentation_status(request: Request) -> Response:
+        if not host_allowed(request):
+            return Response(status_code=403)
+        try:
+            result = await anyio.to_thread.run_sync(documentation.documentation_status)
+        except (ConfigurationError, OSError) as error:
+            return JSONResponse(
+                {"status": "unavailable", "message": f"Не удалось прочитать настройку документации: {error}"},
+                status_code=500,
+            )
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+    @server.custom_route("/api/documentation/activate", methods=["POST"], include_in_schema=False)
+    async def activate_documentation(request: Request) -> Response:
+        if not mutation_allowed(request):
+            return JSONResponse({"message": "Недопустимый локальный запрос"}, status_code=403)
+        try:
+            content_length = int(request.headers.get("content-length", "0") or 0)
+        except ValueError:
+            return JSONResponse({"message": "Некорректная длина запроса"}, status_code=400)
+        if content_length <= 0 or content_length > 8192:
+            return JSONResponse({"message": "Некорректный размер настройки документации"}, status_code=413)
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"message": "Настройка документации должна быть JSON-объектом"}, status_code=400)
+        corpus_path = payload.get("path") if isinstance(payload, dict) else None
+        if not isinstance(corpus_path, str) or not corpus_path.strip():
+            return JSONResponse({"message": "Укажите путь к нормализованной документации"}, status_code=400)
+        corpus_path = corpus_path.strip()
+        if len(corpus_path) > 4096:
+            return JSONResponse({"message": "Путь к документации слишком длинный"}, status_code=400)
+        if not Path(corpus_path).expanduser().is_absolute():
+            return JSONResponse({"message": "Укажите полный путь к нормализованной документации"}, status_code=400)
+        try:
+            result = await anyio.to_thread.run_sync(documentation.activate, corpus_path)
+        except CorpusError as error:
+            return JSONResponse({"status": "invalid", "message": str(error)}, status_code=400)
+        except (ConfigurationError, OSError) as error:
+            return JSONResponse(
+                {"status": "unavailable", "message": f"Не удалось сохранить путь к документации: {error}"},
+                status_code=500,
+            )
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
     @server.custom_route("/api/console/configuration", methods=["GET", "POST"], include_in_schema=False)
     async def configure_console_connection(request: Request) -> Response:

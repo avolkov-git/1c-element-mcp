@@ -41,11 +41,12 @@ def test_ui_reports_running_server_and_protects_mutations(tmp_path: Path) -> Non
         page = client.get("/")
         assert page.status_code == 200
         assert "MCP работает" in page.text
+        assert "Каталог нормализованной документации" in page.text
         assert "frame-ancestors 'none'" in page.headers["content-security-policy"]
 
         status = client.get("/api/status")
         assert status.status_code == 200
-        assert status.json()["server"] == {"state": "running", "version": "0.13.0"}
+        assert status.json()["server"] == {"state": "running", "version": "0.14.0"}
 
         assert client.post("/api/updates/check").status_code == 403
         token = re.search(r'name="element-mcp-token" content="([^"]+)"', page.text).group(1)  # type: ignore[union-attr]
@@ -91,6 +92,68 @@ def test_ui_can_persist_local_update_source(tmp_path: Path) -> None:
 
     persisted = json.loads(config_path.read_text(encoding="utf-8"))
     assert persisted["update_source"] == {"kind": "remote"}
+
+
+def test_ui_can_validate_and_activate_documentation_without_replacing_it_on_error(
+    tmp_path: Path,
+    corpus_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("ELEMENT_DOCS_PATH", raising=False)
+    config_path = tmp_path / "config.json"
+    server = create_server(
+        ServerSettings(
+            data_path=tmp_path / "data",
+            config_path=config_path,
+            transport="streamable-http",
+            host="127.0.0.1",
+        )
+    )
+
+    with TestClient(server.streamable_http_app(), base_url="http://127.0.0.1") as client:
+        page = client.get("/")
+        token = re.search(r'name="element-mcp-token" content="([^"]+)"', page.text).group(1)  # type: ignore[union-attr]
+
+        missing = client.get("/api/documentation")
+        assert missing.status_code == 200
+        assert missing.json()["status"] == "missing"
+        assert missing.json()["path"] is None
+
+        assert client.post("/api/documentation/activate", json={"path": str(corpus_path)}).status_code == 403
+        relative = client.post(
+            "/api/documentation/activate",
+            json={"path": "codex-docs"},
+            headers={"X-Element-MCP-Token": token},
+        )
+        assert relative.status_code == 400
+        assert "полный путь" in relative.json()["message"]
+
+        activated = client.post(
+            "/api/documentation/activate",
+            json={"path": str(corpus_path)},
+            headers={"X-Element-MCP-Token": token},
+        )
+        assert activated.status_code == 200
+        assert activated.json()["status"] == "ready"
+        assert activated.json()["path"] == str(corpus_path.resolve())
+        assert activated.json()["aggregate"] == {"documents": 3, "chunks": 4}
+
+        invalid_path = tmp_path / "not-a-corpus"
+        invalid_path.mkdir()
+        rejected = client.post(
+            "/api/documentation/activate",
+            json={"path": str(invalid_path)},
+            headers={"X-Element-MCP-Token": token},
+        )
+        assert rejected.status_code == 400
+        assert rejected.json()["status"] == "invalid"
+
+        current = client.get("/api/documentation")
+        assert current.json()["status"] == "ready"
+        assert current.json()["path"] == str(corpus_path.resolve())
+
+    persisted = json.loads(config_path.read_text(encoding="utf-8"))
+    assert persisted["active_corpus_path"] == str(corpus_path.resolve())
 
 
 def test_ui_rejects_unexpected_host_header(tmp_path: Path) -> None:

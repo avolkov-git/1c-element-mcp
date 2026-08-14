@@ -11,6 +11,14 @@ const sourceInput = document.querySelector("#source-path");
 const sourceFeedback = document.querySelector("#source-feedback");
 const sourceError = document.querySelector("#source-error");
 const sourceUseOrigin = document.querySelector("#source-use-origin");
+const documentationSummary = document.querySelector("#documentation-summary");
+const documentationToggle = document.querySelector("#documentation-toggle");
+const documentationSettings = document.querySelector("#documentation-settings");
+const documentationPath = document.querySelector("#documentation-path");
+const documentationHelp = document.querySelector("#documentation-help");
+const documentationFeedback = document.querySelector("#documentation-feedback");
+const documentationError = document.querySelector("#documentation-error");
+const documentationActivate = document.querySelector("#documentation-activate");
 const consoleSummary = document.querySelector("#console-summary");
 const consoleToggle = document.querySelector("#console-toggle");
 const consoleSettings = document.querySelector("#console-settings");
@@ -27,6 +35,9 @@ const consoleSave = document.querySelector("#console-save");
 let latestStatus = null;
 let initialVersion = null;
 let sourceDirty = false;
+let documentationStatus = null;
+let documentationDirty = false;
+let documentationBusy = false;
 let consoleConfiguration = null;
 let consoleBusy = false;
 
@@ -66,6 +77,101 @@ function showSourceFeedback(value, state = "") {
   sourceFeedback.textContent = value;
   sourceFeedback.hidden = !value;
   sourceFeedback.dataset.state = state;
+}
+
+function showDocumentationError(value) {
+  documentationError.textContent = value;
+  documentationError.hidden = !value;
+  documentationPath.setAttribute("aria-invalid", value ? "true" : "false");
+}
+
+function showDocumentationFeedback(value, state = "") {
+  documentationFeedback.textContent = value;
+  documentationFeedback.hidden = !value;
+  documentationFeedback.dataset.state = state;
+}
+
+function setDocumentationBusy(value) {
+  documentationBusy = value;
+  const locked = documentationStatus?.path_change_supported === false;
+  documentationPath.disabled = value || locked;
+  documentationActivate.disabled = value || locked;
+  documentationActivate.textContent = value ? "Проверяем…" : "Проверить и подключить";
+}
+
+function documentationSummaryText(payload) {
+  if (payload.status === "ready") return `Подключена · ${payload.path}`;
+  if (payload.status === "invalid") return `Ошибка · ${payload.path}`;
+  return "Не подключена";
+}
+
+function renderDocumentationStatus(payload) {
+  documentationStatus = payload;
+  documentationSummary.textContent = documentationSummaryText(payload);
+  documentationSummary.title = payload.path || "";
+  documentationToggle.textContent = documentationSettings.hidden
+    ? payload.path
+      ? "Изменить"
+      : "Подключить"
+    : "Скрыть";
+  const fixedSetting =
+    payload.path_source === "startup_argument"
+      ? "параметром --corpus-path"
+      : payload.path_source === "environment"
+        ? "переменной ELEMENT_DOCS_PATH"
+        : null;
+  documentationHelp.innerHTML = fixedSetting
+    ? `Путь задан ${fixedSetting}. Измените настройку запуска и перезапустите MCP.`
+    : "Укажите корень готового корпуса с <code>manifest.json</code> и каталогами " +
+      "<code>docs-lang</code>, <code>docs-console</code>, <code>docs-server</code>.";
+  documentationPath.disabled = payload.path_change_supported === false;
+  documentationActivate.disabled = payload.path_change_supported === false;
+  if (!documentationDirty) documentationPath.value = payload.path || "";
+}
+
+async function loadDocumentationStatus() {
+  try {
+    renderDocumentationStatus(await api("/api/documentation"));
+  } catch (error) {
+    documentationSummary.textContent = "Недоступна";
+    showDocumentationError(error.message);
+  }
+}
+
+async function activateDocumentation() {
+  if (documentationBusy) return;
+  if (documentationStatus?.path_change_supported === false) return;
+  const path = documentationPath.value.trim();
+  showDocumentationError("");
+  if (!path) {
+    showDocumentationError("Укажите полный путь к каталогу документации.");
+    documentationPath.focus();
+    return;
+  }
+  showDocumentationFeedback("Проверяем корпус и все поисковые индексы…", "loading");
+  setDocumentationBusy(true);
+  try {
+    const payload = await api("/api/documentation/activate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    documentationDirty = false;
+    renderDocumentationStatus(payload);
+    const documents = payload.aggregate?.documents;
+    const chunks = payload.aggregate?.chunks;
+    const details =
+      Number.isInteger(documents) && Number.isInteger(chunks)
+        ? ` Документов: ${documents}, фрагментов: ${chunks}.`
+        : "";
+    showDocumentationFeedback(`Корпус проверен и подключён.${details}`, "success");
+  } catch (error) {
+    showDocumentationFeedback("");
+    showDocumentationError(error.message);
+    documentationPath.focus();
+  } finally {
+    setDocumentationBusy(false);
+  }
 }
 
 function showConsoleError(value, invalidField = null) {
@@ -407,6 +513,33 @@ sourceSettings.addEventListener("submit", (event) => {
   checkUpdates(true);
 });
 
+documentationToggle.addEventListener("click", () => {
+  const open = documentationSettings.hidden;
+  documentationSettings.hidden = !open;
+  documentationToggle.setAttribute("aria-expanded", String(open));
+  documentationToggle.textContent = open
+    ? "Скрыть"
+    : documentationStatus?.path
+      ? "Изменить"
+      : "Подключить";
+  if (open) {
+    showDocumentationFeedback("");
+    showDocumentationError(documentationStatus?.status === "invalid" ? documentationStatus.message : "");
+    documentationPath.focus();
+  }
+});
+
+documentationPath.addEventListener("input", () => {
+  documentationDirty = true;
+  showDocumentationError("");
+  showDocumentationFeedback("Путь изменён, но ещё не подключён.", "pending");
+});
+
+documentationSettings.addEventListener("submit", (event) => {
+  event.preventDefault();
+  activateDocumentation();
+});
+
 consoleToggle.addEventListener("click", () => {
   const open = consoleSettings.hidden;
   consoleSettings.hidden = !open;
@@ -443,6 +576,7 @@ consoleSettings.addEventListener("submit", (event) => {
   saveConsoleConnection();
 });
 
+loadDocumentationStatus();
 loadConsoleConfiguration();
 
 api("/api/status")

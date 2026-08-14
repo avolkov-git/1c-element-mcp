@@ -60,6 +60,7 @@ select {
 .header,
 .runtime-status,
 .metadata,
+.documentation-settings,
 .source-settings,
 .console-settings,
 .update-area {
@@ -185,12 +186,14 @@ h1 {
   color: var(--primary-hover);
 }
 
+.documentation-settings,
 .source-settings,
 .console-settings {
   padding-block: 24px;
   border-top: 1px solid var(--border);
 }
 
+.documentation-settings label,
 .source-settings label,
 .console-settings fieldset > label {
   display: block;
@@ -198,6 +201,7 @@ h1 {
   font-weight: 650;
 }
 
+.documentation-settings input,
 .source-settings input,
 .console-settings fieldset > input {
   width: 100%;
@@ -212,12 +216,14 @@ h1 {
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 
+.documentation-settings input::placeholder,
 .source-settings input::placeholder,
 .console-settings fieldset > input::placeholder {
   color: var(--muted);
   opacity: 1;
 }
 
+.documentation-settings input[aria-invalid="true"],
 .source-settings input[aria-invalid="true"],
 .console-settings input[aria-invalid="true"] {
   border-color: var(--danger);
@@ -395,12 +401,14 @@ h1 {
 .secondary-action:focus-visible,
 .settings-action:focus-visible,
 .switch-label input:focus-visible,
+.documentation-settings input:focus-visible,
 .source-settings input:focus-visible,
 .console-settings input:focus-visible {
   outline: 3px solid color-mix(in oklch, var(--focus), transparent 35%);
   outline-offset: 2px;
 }
 
+.documentation-settings input:focus-visible,
 .source-settings input:focus-visible,
 .console-settings fieldset > input:focus-visible {
   border-color: var(--focus);
@@ -433,9 +441,10 @@ h1 {
   }
 
   .header,
-  .runtime-status,
-  .metadata,
-  .source-settings,
+    .runtime-status,
+    .metadata,
+    .documentation-settings,
+    .source-settings,
   .console-settings,
   .update-area {
     padding-inline: 22px;
