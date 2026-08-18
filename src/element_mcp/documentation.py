@@ -9,6 +9,7 @@ from .corpus import CorpusError, CorpusRepository
 from .jobs import DocumentationJobManager
 from .normalizer import NORMALIZER_VERSION, SUPPORTED_GUIDE_SETS
 from .normalizer.validation import validate_corpus_root
+from .references import ReferenceCatalogService
 
 
 class DocumentationService:
@@ -19,6 +20,9 @@ class DocumentationService:
         self._repository: CorpusRepository | None = None
         self._repository_path: Path | None = None
         self._manifest_mtime_ns: int | None = None
+        self._references: ReferenceCatalogService | None = None
+        self._references_path: Path | None = None
+        self._reference_catalog_mtime_ns: int | None = None
 
     def active_path(self) -> Path | None:
         return discover_corpus_path(self.settings.corpus_path, config_store=self.configuration)
@@ -82,6 +86,9 @@ class DocumentationService:
         self._repository = None
         self._repository_path = None
         self._manifest_mtime_ns = None
+        self._references = None
+        self._references_path = None
+        self._reference_catalog_mtime_ns = None
         return {
             **report,
             "message": "Корпус проверен и подключён",
@@ -111,4 +118,33 @@ class DocumentationService:
         status = self.documentation_status()
         if status["status"] != "ready":
             return status
-        return {"status": "ready", "path": status["path"], **self.repository().info()}
+        return {
+            "status": "ready",
+            "path": status["path"],
+            **self.repository().info(),
+            "references": self.references().status(),
+        }
+
+    def references(self) -> ReferenceCatalogService:
+        path = self.active_path()
+        if path is None:
+            raise CorpusError(
+                "Нормализованный корпус не настроен. "
+                "Вызовите get_documentation_status и подключите или создайте корпус."
+            )
+        catalog = path / "reference-catalog.json"
+        try:
+            mtime_ns = catalog.stat().st_mtime_ns
+        except FileNotFoundError:
+            mtime_ns = -1
+        except OSError as error:
+            raise CorpusError(f"Не удалось проверить справочный каталог: {catalog}") from error
+        if (
+            self._references is None
+            or self._references_path != path
+            or self._reference_catalog_mtime_ns != mtime_ns
+        ):
+            self._references = ReferenceCatalogService(path)
+            self._references_path = path
+            self._reference_catalog_mtime_ns = mtime_ns
+        return self._references

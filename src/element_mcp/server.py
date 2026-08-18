@@ -54,8 +54,10 @@ corpus is active. A previous active corpus remains unchanged.
 
 For an existing normalized corpus, call activate_documentation and report success only when status is ready.
 Call cancel_documentation_build only after an explicit user request; cancellation does not remove or alter the
-active corpus. For answers about Element, call search_docs first, then get_document for the selected chunk.
-Preserve product_version, source_version, and provenance whenever they matter to the answer.
+active corpus. For exact inventories, Console API contracts, schemas, server components, and startup chains, call
+list_reference_datasets and then a typed reference tool or query_reference. Use search_docs and get_document for
+explanations and prose. Prefer typed reference tools over generic query_reference when one exists. Never guess a
+dataset id: list it first. Preserve product_version, source_version, dataset_id, and provenance whenever they matter.
 
 For questions about the user's Element source project, first call get_project_status. If it is missing, ask for
 the exact project root and call connect_project only with a path explicitly supplied or confirmed by the user.
@@ -121,6 +123,84 @@ def create_server(settings: ServerSettings) -> FastMCP:
     def get_corpus_info() -> dict[str, Any]:
         """Return available corpora, Element versions, index metadata, and MCP server version."""
         return {"server_version": __version__, **documentation.corpus_info()}
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def list_reference_datasets(
+        corpus: Literal["lang", "console", "server"] | None = None,
+        product_version: Annotated[str | None, Field(max_length=64)] = None,
+        name: Annotated[str | None, Field(max_length=128)] = None,
+        offset: Annotated[int, Field(ge=0)] = 0,
+        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+    ) -> dict[str, Any]:
+        """List exact structured datasets in the active corpus before using query_reference."""
+        return documentation.references().list_datasets(
+            corpus=corpus,
+            product_version=product_version,
+            name=name,
+            offset=offset,
+            limit=limit,
+        )
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def query_reference(
+        dataset_id: Annotated[str, Field(min_length=1, max_length=256)],
+        query: Annotated[str | None, Field(max_length=500)] = None,
+        filters: Annotated[
+            dict[str, str] | None,
+            Field(description="Up to 8 exact, case-insensitive field filters"),
+        ] = None,
+        offset: Annotated[int, Field(ge=0)] = 0,
+        limit: Annotated[int, Field(ge=1, le=100)] = 20,
+    ) -> dict[str, Any]:
+        """Query one listed structured dataset with bounded text search, exact filters, and pagination."""
+        return documentation.references().query(
+            dataset_id,
+            query=query,
+            filters=filters,
+            offset=offset,
+            limit=limit,
+        )
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def get_api_operation(
+        method: Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+        path: Annotated[str, Field(min_length=1, max_length=512)],
+        product_version: Annotated[str | None, Field(max_length=64)] = None,
+    ) -> dict[str, Any]:
+        """Get one exact Console API operation and its resolved schemas from the normalized bundle documentation."""
+        return documentation.references().get_api_operation(method, path, product_version)
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def get_api_schema(
+        title: Annotated[str, Field(min_length=1, max_length=256)],
+        product_version: Annotated[str | None, Field(max_length=64)] = None,
+    ) -> dict[str, Any]:
+        """Get one exact Console API schema, properties, example, version, and provenance."""
+        return documentation.references().get_api_schema(title, product_version)
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def get_server_component(
+        component_id: Annotated[str, Field(min_length=1, max_length=128)],
+        product_version: Annotated[str | None, Field(max_length=64)] = None,
+    ) -> dict[str, Any]:
+        """Get one structured server-bundle component and its evidence paths."""
+        return documentation.references().get_server_component(component_id, product_version)
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def get_server_entrypoint(
+        entrypoint_id: Annotated[str, Field(min_length=1, max_length=128)],
+        product_version: Annotated[str | None, Field(max_length=64)] = None,
+    ) -> dict[str, Any]:
+        """Get one server or embedded IDE startup entrypoint and its launch chain."""
+        return documentation.references().get_server_entrypoint(entrypoint_id, product_version)
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def get_component_connections(
+        component_id: Annotated[str, Field(min_length=1, max_length=128)],
+        product_version: Annotated[str | None, Field(max_length=64)] = None,
+    ) -> dict[str, Any]:
+        """List verified structured connections involving one server-bundle component."""
+        return documentation.references().get_component_connections(component_id, product_version)
 
     @server.tool(annotations=READ_ONLY, structured_output=True)
     def get_project_status() -> dict[str, Any]:

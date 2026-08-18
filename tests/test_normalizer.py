@@ -48,12 +48,16 @@ def test_builds_all_corpora_with_authored_guides(tmp_path: Path) -> None:
     )
     report = validate_corpus_root(output, write_report=True)
 
-    assert manifest["normalizer_version"] == "1.0.0"
+    assert manifest["normalizer_version"] == "1.1.0"
     assert manifest["guide_set_version"] == "9.2.4-6"
     assert report["status"] == "ready"
     assert {item["corpus"] for item in report["corpora"]} == {"lang", "console", "server"}
     assert (output / "docs-console" / "guides" / "10-mcp-design-and-safe-operations.md").is_file()
     assert all(item["documents"] > 1 for item in report["corpora"])
+    assert report["references"]["status"] == "ready"
+    assert manifest["reference_catalog"]["datasets"] >= 19
+    assert (output / "docs-console/versions/9.2.4-6/reference/api-operations.jsonl").is_file()
+    assert (output / "docs-server/versions/9.2.4-6/reference/components.jsonl").is_file()
 
     root_manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
     assert "bundle_path" not in root_manifest["releases"][0]

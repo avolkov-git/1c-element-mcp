@@ -46,6 +46,87 @@ GOLDEN_CORPORA: dict[str, dict[str, dict[str, Any]]] = {
     }
 }
 
+GOLDEN_REFERENCES: dict[str, dict[str, tuple[int | None, str]]] = {
+    "9.2.4-6": {
+        "lang.9.2.4-6.lang-link-graph": (
+            None,
+            "1dcc7ef581abec160e310ffc9ee99604d3cc1552fd76f5760c4d0e94c7028f09",
+        ),
+        "console.9.2.4-6.api-operations": (
+            166,
+            "4fed50641cb1b4fa2c338c1a02e7df202e79dced7a5fce2d29cd320a6511d88c",
+        ),
+        "console.9.2.4-6.api-schemas": (
+            87,
+            "b375ff76263c748d925dbccb93f1b5c5a75b0720f3a804a004ebcc3129f13800",
+        ),
+        "console.9.2.4-6.elements": (
+            2246,
+            "714f089d6dea7c3123bcb163e96137ae13a32ed03bcdbeae8b230ad524151e75",
+        ),
+        "console.9.2.4-6.http-routes": (
+            466,
+            "4261a67c3a2bc59d12ad95073c0e9026694b47925961877e3bbbea129229fd44",
+        ),
+        "console.9.2.4-6.imports": (
+            3472,
+            "3a424ad538f8876ddb36926b4021fb765744e2df6156524d0b634c7782e91149",
+        ),
+        "console.9.2.4-6.official-link-graph": (
+            None,
+            "681e942f6bb9b75a6a12b18763fdebd7448bbac1e19926acb191b914f25908c4",
+        ),
+        "console.9.2.4-6.methods": (
+            13558,
+            "557af417a1bc50c04eff6d6f121de7575f7d3e1c69d7704d9f2269aafc382dc9",
+        ),
+        "console.9.2.4-6.subsystems": (
+            48,
+            "cab2050fb1bbf02dae72f8a5dff1663c3041e5928443db75eaaca2431a433f05",
+        ),
+        "server.9.2.4-6.files": (
+            19285,
+            "a3b55f90c92fdb1755df17a6aa9571f66c665610348a36f0e29555fe66338c0f",
+        ),
+        "server.9.2.4-6.jar-packages": (
+            16127,
+            "73377d70994aa5c5f0c37a2823450a448a28d149c2af8bce5def1537a50973be",
+        ),
+        "server.9.2.4-6.jars": (
+            1496,
+            "271c6809b1b0809b2b0a9569c5ded3f91ac4f3f20db06fa4188a3af5e00a56d6",
+        ),
+        "server.9.2.4-6.components": (
+            10,
+            "5abc0a5552063f5311fe2312daf08e3761522a404fefa6cc8efe208d42633999",
+        ),
+        "server.9.2.4-6.config-files": (
+            14,
+            "cc8ea0be5da03f3c10ecea2d252bdb17d511e4206dbaada655753885ae6b797f",
+        ),
+        "server.9.2.4-6.connections": (
+            4,
+            "541b5a21b591cb7f5789792b00353f5bff642edd31f4d3656685f00e3e689ce8",
+        ),
+        "server.9.2.4-6.entrypoints": (
+            6,
+            "b295eef7f6e814ab57ee57ea0b043dd8545f142f22d6f61299d82281540244c5",
+        ),
+        "server.9.2.4-6.extensions": (
+            16,
+            "ad1bbd49cdaa2b933ef7eae7897cff4d24de37628f0d79463c2109e3a8ea94c9",
+        ),
+        "server.9.2.4-6.host-modules": (
+            80,
+            "f31359100c21aec3ef8dcd428195f461b2ebfd6f7e0da40bffb5eea711b042a5",
+        ),
+        "server.9.2.4-6.server-link-graph": (
+            None,
+            "32237343ad17130129774f56f7d98eaac4710dbdcdc4f6fed1e180ad61b3b5db",
+        ),
+    }
+}
+
 
 def golden_mismatches(report: dict[str, Any], product_version: str) -> list[str]:
     expected = GOLDEN_CORPORA.get(product_version)
@@ -61,4 +142,18 @@ def golden_mismatches(report: dict[str, Any], product_version: str) -> list[str]
         for field, expected_value in expected_values.items():
             if item.get(field) != expected_value:
                 mismatches.append(f"{corpus_name}.{field}: получено {item.get(field)!r}, ожидалось {expected_value!r}")
+    expected_references = GOLDEN_REFERENCES.get(product_version, {})
+    actual_references = {
+        row["id"]: (row.get("records"), row.get("sha256"))
+        for row in report.get("references", {}).get("dataset_checks", [])
+    }
+    if set(actual_references) != set(expected_references):
+        missing = sorted(set(expected_references) - set(actual_references))
+        extra = sorted(set(actual_references) - set(expected_references))
+        mismatches.append(f"references.datasets: отсутствуют {missing}, лишние {extra}")
+    for dataset_id, expected_value in expected_references.items():
+        if dataset_id in actual_references and actual_references[dataset_id] != expected_value:
+            mismatches.append(
+                f"references.{dataset_id}: получено {actual_references[dataset_id]!r}, ожидалось {expected_value!r}"
+            )
     return mismatches

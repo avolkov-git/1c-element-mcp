@@ -26,8 +26,15 @@ from .common import (
     write_json,
     write_jsonl,
 )
+from .references import (
+    REFERENCE_SCHEMA_VERSION,
+    build_console_api_references,
+    build_link_graph,
+    build_reference_catalog,
+    build_server_references,
+)
 
-NORMALIZER_VERSION = "1.0.0"
+NORMALIZER_VERSION = "1.1.0"
 CORPUS_SCHEMA_VERSION = 1
 SUPPORTED_GUIDE_SETS = ("9.2.4-6",)
 
@@ -165,6 +172,7 @@ def build_language(release: dict) -> tuple[list[dict], dict]:
             section_counts[section] += 1
 
     write_jsonl(version_root / "documents.jsonl", documents)
+    build_link_graph(documents, version_root / "reference" / "link-graph.json")
     coverage = {
         "source_html": sum(1 for section in ("topics", "stdlib") for _ in (docs_root / section).rglob("*.html")),
         "normalized_documents": len(documents),
@@ -450,6 +458,8 @@ def build_console(release: dict) -> tuple[list[dict], dict]:
             )
         )
     write_jsonl(reference_root / "subsystems.jsonl", subsystem_summary)
+    api_coverage = build_console_api_references(docs_root, reference_root)
+    build_link_graph(documents, reference_root / "link-graph.json")
     write_jsonl(version_root / "documents.jsonl", documents)
     coverage = {
         "jar": str(jar_path.relative_to(bundle)),
@@ -463,6 +473,7 @@ def build_console(release: dict) -> tuple[list[dict], dict]:
         "imports": len(imports),
         "http_routes": len(routes),
         "yaml_errors": yaml_errors,
+        **api_coverage,
         "created_at": utc_now(),
     }
     write_json(version_root / "coverage.json", coverage)
@@ -793,6 +804,8 @@ def build_server(release: dict) -> tuple[list[dict], dict]:
         official_server_docs += 1
 
     write_jsonl(version_root / "documents.jsonl", documents)
+    structured_coverage = build_server_references(bundle, version_root)
+    build_link_graph(documents, version_root / "reference" / "link-graph.json")
     coverage = {
         "bundle_files": len(file_rows),
         "bundle_bytes": sum(row["bytes"] for row in file_rows),
@@ -805,6 +818,7 @@ def build_server(release: dict) -> tuple[list[dict], dict]:
         "ide_plugin_sources": plugin_source_count,
         "lsp_resources": lsp_resource_count,
         "official_server_topics": official_server_docs,
+        **structured_coverage,
         "created_at": utc_now(),
     }
     write_json(version_root / "coverage.json", coverage)
@@ -927,6 +941,7 @@ def build_normalized_corpus(
     if progress:
         progress("index", 85, "Построение JSONL, SQLite и векторных индексов")
     aggregate([release], per_corpus)
+    reference_catalog = build_reference_catalog(ROOT, NORMALIZER_VERSION)
 
     manifest = {
         "schema_version": CORPUS_SCHEMA_VERSION,
@@ -935,6 +950,11 @@ def build_normalized_corpus(
         "created_at": utc_now(),
         "releases": [public_release],
         "corpora": {name: len(documents) for name, documents in per_corpus.items()},
+        "reference_catalog": {
+            "path": "reference-catalog.json",
+            "schema_version": REFERENCE_SCHEMA_VERSION,
+            **reference_catalog["summary"],
+        },
     }
     write_json(ROOT / "manifest.json", manifest)
     if progress:
@@ -998,6 +1018,7 @@ def main() -> int:
                 row for file in sorted(versions.glob("*/documents.jsonl")) for row in iter_jsonl(file)
             ]
         aggregate(releases, per_corpus)
+        reference_catalog = build_reference_catalog(ROOT, NORMALIZER_VERSION)
         write_json(
             ROOT / "manifest.json",
             {
@@ -1005,6 +1026,12 @@ def main() -> int:
                 "created_at": utc_now(),
                 "releases": releases,
                 "corpora": {key: len(value) for key, value in per_corpus.items()},
+                "normalizer_version": NORMALIZER_VERSION,
+                "reference_catalog": {
+                    "path": "reference-catalog.json",
+                    "schema_version": REFERENCE_SCHEMA_VERSION,
+                    **reference_catalog["summary"],
+                },
             },
         )
         print("Reindex done", flush=True)
@@ -1035,6 +1062,7 @@ def main() -> int:
         write_json(release_root / "manifest.json", summary)
         release_summaries.append(summary)
     aggregate(releases, per_corpus)
+    reference_catalog = build_reference_catalog(ROOT, NORMALIZER_VERSION)
     write_json(
         ROOT / "manifest.json",
         {
@@ -1042,6 +1070,12 @@ def main() -> int:
             "created_at": utc_now(),
             "releases": [row["release"] for row in release_summaries],
             "corpora": {key: len(value) for key, value in per_corpus.items()},
+            "normalizer_version": NORMALIZER_VERSION,
+            "reference_catalog": {
+                "path": "reference-catalog.json",
+                "schema_version": REFERENCE_SCHEMA_VERSION,
+                **reference_catalog["summary"],
+            },
         },
     )
     print("Done", flush=True)

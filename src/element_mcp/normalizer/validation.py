@@ -8,6 +8,8 @@ from typing import Any
 
 import numpy as np
 
+from ..corpus import CorpusError
+from ..references import ReferenceCatalogService
 from .common import iter_jsonl, sha256_text, utc_now, write_json
 
 CORPORA = ("lang", "console", "server")
@@ -137,6 +139,7 @@ def validate_corpus_root(
 ) -> dict[str, Any]:
     root_path = Path(root).expanduser().resolve()
     errors: list[str] = []
+    warnings: list[str] = []
     try:
         manifest = _read_json(root_path / "manifest.json")
     except (OSError, ValueError, json.JSONDecodeError) as error:
@@ -148,6 +151,28 @@ def validate_corpus_root(
         }
     reports = [validate_corpus(root_path, name, verify_content_hashes=verify_content_hashes) for name in CORPORA]
     errors.extend(error for report in reports for error in report["errors"])
+    reference_report: dict[str, Any]
+    try:
+        references = ReferenceCatalogService(root_path)
+        reference_report = references.status()
+        listed_datasets = references.list_datasets(limit=100)["items"] if references.available else []
+        reference_report["dataset_checks"] = [
+            {"id": row["id"], "records": row.get("records"), "sha256": row.get("sha256")}
+            for row in listed_datasets
+        ]
+        if references.available and verify_content_hashes:
+            for dataset in listed_datasets:
+                references.query(dataset["id"], limit=1)
+            reference_report["content_hashes_verified"] = True
+        elif references.available:
+            reference_report["content_hashes_verified"] = False
+        elif manifest.get("reference_catalog"):
+            errors.append("manifest declares reference_catalog, but reference-catalog.json is missing")
+        else:
+            warnings.append("structured reference catalog is unavailable; full-text corpus remains usable")
+    except CorpusError as error:
+        reference_report = {"status": "invalid", "error": str(error)}
+        errors.append(f"reference catalog: {error}")
     aggregate = {
         "documents": sum(report.get("documents", 0) for report in reports),
         "chunks": sum(report.get("chunks", 0) for report in reports),
@@ -162,7 +187,9 @@ def validate_corpus_root(
         "created_at": utc_now(),
         "aggregate": aggregate,
         "corpora": reports,
+        "references": reference_report,
         "errors": errors,
+        "warnings": warnings,
     }
     if write_report:
         write_json(root_path / "validation-report.json", report)

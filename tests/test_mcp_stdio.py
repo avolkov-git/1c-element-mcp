@@ -34,7 +34,7 @@ def test_stdio_server_exposes_read_only_tools(
         ):
             initialized = await session.initialize()
             assert initialized.serverInfo.name == "1C Element"
-            assert initialized.serverInfo.version == "0.14.0"
+            assert initialized.serverInfo.version == "0.15.0"
             assert initialized.instructions is not None
             assert "first call\nget_documentation_status" in initialized.instructions
             assert "Never call start_documentation_build without that consent" in initialized.instructions
@@ -42,7 +42,7 @@ def test_stdio_server_exposes_read_only_tools(
             assert (
                 "poll get_documentation_build_status until completed, failed, or cancelled" in initialized.instructions
             )
-            assert "call search_docs first, then get_document" in initialized.instructions
+            assert "call\nlist_reference_datasets" in initialized.instructions
             assert "first call get_project_status" in initialized.instructions
             assert "Never read paths outside the connected project" in initialized.instructions
             assert "first call get_console_status" in initialized.instructions
@@ -61,6 +61,13 @@ def test_stdio_server_exposes_read_only_tools(
                 "configure_language_server",
                 "discover_element_installations",
                 "get_corpus_info",
+                "list_reference_datasets",
+                "query_reference",
+                "get_api_operation",
+                "get_api_schema",
+                "get_server_component",
+                "get_server_entrypoint",
+                "get_component_connections",
                 "get_console_project",
                 "get_console_status",
                 "get_current_application",
@@ -88,6 +95,13 @@ def test_stdio_server_exposes_read_only_tools(
             read_only = {
                 "discover_element_installations",
                 "get_corpus_info",
+                "list_reference_datasets",
+                "query_reference",
+                "get_api_operation",
+                "get_api_schema",
+                "get_server_component",
+                "get_server_entrypoint",
+                "get_component_connections",
                 "get_console_project",
                 "get_console_status",
                 "get_current_application",
@@ -129,11 +143,26 @@ def test_stdio_server_exposes_read_only_tools(
             assert "Element LSP" in (descriptions["get_definition"] or "")
             assert "Element LSP" in (descriptions["get_references"] or "")
             assert "published by Element LSP" in (descriptions["get_project_diagnostics"] or "")
+            assert "structured datasets" in (descriptions["list_reference_datasets"] or "")
+            assert "resolved schemas" in (descriptions["get_api_operation"] or "")
 
             result = await session.call_tool("search_docs", {"query": "ВебМетод", "corpus": "lang"})
             assert result.isError is False
             assert result.structuredContent is not None
             assert result.structuredContent["count"] >= 1
+
+            references = await session.call_tool("list_reference_datasets", {"corpus": "console"})
+            assert references.isError is False
+            assert references.structuredContent is not None
+            assert references.structuredContent["total"] == 2
+
+            operation = await session.call_tool(
+                "get_api_operation",
+                {"method": "GET", "path": "/console/api/v2/projects/{ProjectId}"},
+            )
+            assert operation.isError is False
+            assert operation.structuredContent is not None
+            assert operation.structuredContent["resolved_schemas"][0]["title"] == "ProjectDto"
 
             overview = await session.call_tool("get_project_overview", {})
             assert overview.isError is False

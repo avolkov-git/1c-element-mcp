@@ -35,3 +35,21 @@
 - `bundle-file` — файл бандла;
 - `jar-inventory` — сведения, извлечённые из JAR;
 - `derived-analysis` — аналитическое руководство, подготовленное по нескольким источникам.
+
+## Структурированные справочники
+
+Корневой `reference-catalog.json` регистрирует точные JSON/JSONL-наборы. Dataset содержит стабильный `id` вида
+`<corpus>.<product_version>.<name>`, относительный `path`, `format`, `records`, `primary_key`, `provenance` и
+`sha256`. Относительный путь не может выходить за корень корпуса. Клиент обязан проверять SHA-256 перед чтением.
+
+Справочники находятся в `versions/<product_version>/reference`; полные инвентари server bundle остаются в
+`versions/<product_version>/inventory`. Они дополняют, но не заменяют поисковые документы:
+
+- `api-operations` и `api-schemas` дают точные контракты Console API;
+- `elements`, `methods`, `imports`, `http-routes`, `subsystems` описывают исходники Console;
+- `files`, `jars`, `jar-packages` дают полный инвентарь поставки;
+- `components`, `entrypoints`, `extensions`, `host-modules`, `config-files`, `connections` описывают устройство;
+- `*-link-graph` связывает нормализованные документы.
+
+`config-files` хранит имена верхнеуровневых ключей и хеш файла, но не значения конфигурации. Это исключает
+перенос паролей, токенов и адресов из пользовательской установки в ответы MCP.

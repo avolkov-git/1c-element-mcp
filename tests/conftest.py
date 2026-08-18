@@ -62,6 +62,14 @@ def _write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _write_reference_jsonl(path: Path, rows: list[dict]) -> dict:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as stream:
+        for row in rows:
+            stream.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return {"records": len(rows), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+
+
 def _create_index(path: Path, corpus: str, chunks: list[dict]) -> None:
     database = sqlite3.connect(path / "index.sqlite")
     database.executescript(
@@ -171,6 +179,120 @@ def corpus_path(tmp_path: Path) -> Path:
         path = root / f"docs-{corpus}" / "corpus"
         path.mkdir(parents=True)
         _create_index(path, corpus, chunks)
+    reference_rows = {
+        "console.9.2.4-6.api-operations": (
+            "docs-console/versions/9.2.4-6/reference/api-operations.jsonl",
+            "api-operations",
+            "console",
+            [
+                {
+                    "doc_id": "console-get-project",
+                    "title": "Получить проект",
+                    "method": "GET",
+                    "path": "/console/api/v2/projects/{ProjectId}",
+                    "parameters": [{"name": "ProjectId", "in": "path", "required": True}],
+                    "responses": {"200": {"description": "OK"}},
+                    "resolved_schema_doc_ids": ["console-schemas-projectdto"],
+                    "source_url": "/docs/help/console/get-project/",
+                },
+                {
+                    "doc_id": "console-post-project",
+                    "title": "Создать проект",
+                    "method": "POST",
+                    "path": "/console/api/v2/projects",
+                    "parameters": [],
+                    "responses": {"201": {"description": "Created"}},
+                    "resolved_schema_doc_ids": ["console-schemas-projectdto"],
+                    "source_url": "/docs/help/console/post-project/",
+                },
+            ],
+        ),
+        "console.9.2.4-6.api-schemas": (
+            "docs-console/versions/9.2.4-6/reference/api-schemas.jsonl",
+            "api-schemas",
+            "console",
+            [
+                {
+                    "doc_id": "console-schemas-projectdto",
+                    "title": "ProjectDto",
+                    "description": "Карточка проекта",
+                    "properties": [{"name": "id", "type": "string"}],
+                    "source_url": "/docs/help/console/schemas/projectdto/",
+                }
+            ],
+        ),
+        "server.9.2.4-6.components": (
+            "docs-server/versions/9.2.4-6/reference/components.jsonl",
+            "components",
+            "server",
+            [
+                {
+                    "doc_id": "bundle-component-ide",
+                    "component_id": "ide",
+                    "title": "Встроенная IDE",
+                    "summary": "Theia IDE",
+                    "evidence_paths": ["ide/theia"],
+                }
+            ],
+        ),
+        "server.9.2.4-6.entrypoints": (
+            "docs-server/versions/9.2.4-6/reference/entrypoints.jsonl",
+            "entrypoints",
+            "server",
+            [
+                {
+                    "doc_id": "bundle-entrypoint-element-server",
+                    "entrypoint_id": "element-server",
+                    "title": "Element server",
+                    "path": "element-server.sh",
+                    "launch_chain": ["element-server.sh", "bin/element-server"],
+                }
+            ],
+        ),
+        "server.9.2.4-6.connections": (
+            "docs-server/versions/9.2.4-6/reference/connections.jsonl",
+            "connections",
+            "server",
+            [
+                {
+                    "connection_id": "ide-to-server",
+                    "source_component_id": "ide",
+                    "target_component_id": "server-runtime",
+                    "protocol": "HTTP",
+                    "evidence_paths": ["ide/theia", "instance-template/config"],
+                }
+            ],
+        ),
+    }
+    datasets = []
+    records = 0
+    for dataset_id, (relative, name, corpus, rows) in reference_rows.items():
+        metadata = _write_reference_jsonl(root / relative, rows)
+        records += metadata["records"]
+        datasets.append(
+            {
+                "id": dataset_id,
+                "corpus": corpus,
+                "product_version": "9.2.4-6",
+                "name": name,
+                "description": f"Test {name}",
+                "path": relative,
+                "format": "jsonl",
+                "records": metadata["records"],
+                "primary_key": None,
+                "provenance": "test-fixture",
+                "sha256": metadata["sha256"],
+            }
+        )
+    _write_json(
+        root / "reference-catalog.json",
+        {
+            "schema_version": 1,
+            "purpose": "Test reference catalog",
+            "datasets": datasets,
+            "summary": {"datasets": len(datasets), "jsonl_records": records},
+        },
+    )
     return root
 
 
