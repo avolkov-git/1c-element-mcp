@@ -140,7 +140,7 @@ def _scan_api_bundles(docs_root: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for path in sorted((docs_root / "assets" / "js").glob("*.js")):
         text = path.read_text(encoding="utf-8", errors="ignore")
-        if "@site/docs/console/" not in text or '\"api\":\"eJ' not in text:
+        if "@site/docs/console/" not in text or '"api":"eJ' not in text:
             continue
         for match in parse_pattern.finditer(text):
             try:

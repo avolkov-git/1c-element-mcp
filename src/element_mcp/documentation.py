@@ -139,11 +139,7 @@ class DocumentationService:
             mtime_ns = -1
         except OSError as error:
             raise CorpusError(f"Не удалось проверить справочный каталог: {catalog}") from error
-        if (
-            self._references is None
-            or self._references_path != path
-            or self._reference_catalog_mtime_ns != mtime_ns
-        ):
+        if self._references is None or self._references_path != path or self._reference_catalog_mtime_ns != mtime_ns:
             self._references = ReferenceCatalogService(path)
             self._references_path = path
             self._reference_catalog_mtime_ns = mtime_ns

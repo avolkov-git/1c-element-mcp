@@ -157,8 +157,7 @@ def validate_corpus_root(
         reference_report = references.status()
         listed_datasets = references.list_datasets(limit=100)["items"] if references.available else []
         reference_report["dataset_checks"] = [
-            {"id": row["id"], "records": row.get("records"), "sha256": row.get("sha256")}
-            for row in listed_datasets
+            {"id": row["id"], "records": row.get("records"), "sha256": row.get("sha256")} for row in listed_datasets
         ]
         if references.available and verify_content_hashes:
             for dataset in listed_datasets:
