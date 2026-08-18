@@ -226,9 +226,7 @@ def test_ide_git_summary_requires_paths_and_never_starts_second_git(
     element_project_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = ProjectService(
-        ServerSettings(config_path=tmp_path / "config.json", data_path=tmp_path / "data")
-    )
+    project = ProjectService(ServerSettings(config_path=tmp_path / "config.json", data_path=tmp_path / "data"))
     context = project.prepare_ide_workspace(
         {
             "workspace_folders": [str(element_project_path)],

@@ -208,10 +208,7 @@ class ProjectGraphService:
             node
             for node in graph.nodes.values()
             if node["type"] == "element"
-            and (
-                normalized_subsystem is None
-                or str(node.get("subsystem") or "").casefold() == normalized_subsystem
-            )
+            and (normalized_subsystem is None or str(node.get("subsystem") or "").casefold() == normalized_subsystem)
         ]
         candidates.sort(key=lambda node: (str(node.get("metadata_path", "")).casefold(), node["id"]))
         total = len(candidates)
@@ -873,11 +870,16 @@ class ProjectGraphService:
             return _FileFacts(relative, path.suffix.lower(), False, (), (), (), (), (), (), ())
         suffix = path.suffix.lower()
         values = _top_level_values(text) if suffix in {".yaml", ".yml"} else {}
-        is_element_source = suffix not in {".yaml", ".yml"} or path.name in (
-            *ROOT_MANIFESTS,
-            *SUBSYSTEM_MANIFESTS,
-            *RESOURCE_MANIFESTS,
-        ) or _first(values, "ElementKind", "ВидЭлемента") is not None
+        is_element_source = (
+            suffix not in {".yaml", ".yml"}
+            or path.name
+            in (
+                *ROOT_MANIFESTS,
+                *SUBSYSTEM_MANIFESTS,
+                *RESOURCE_MANIFESTS,
+            )
+            or _first(values, "ElementKind", "ВидЭлемента") is not None
+        )
         if not is_element_source:
             return _FileFacts(relative, suffix, False, (), (), (), (), (), (), ())
 
@@ -1043,9 +1045,9 @@ class ProjectGraphService:
                     {
                         "node_ids": next_node_path,
                         "edge_ids": next_edge_path,
-                        "confidence": "medium" if any(
-                            result_edges[edge_id]["confidence"] != "high" for edge_id in next_edge_path
-                        ) else "high",
+                        "confidence": "medium"
+                        if any(result_edges[edge_id]["confidence"] != "high" for edge_id in next_edge_path)
+                        else "high",
                     }
                 )
                 queue.append((target, level + 1, next_node_path, next_edge_path))
@@ -1205,8 +1207,7 @@ class ProjectGraphService:
             candidates = [
                 graph.nodes[node_id]
                 for node_id in graph.element_node_ids
-                if str(PurePosixPath(str(graph.nodes[node_id].get("metadata_path") or "")).with_suffix(""))
-                == stem_path
+                if str(PurePosixPath(str(graph.nodes[node_id].get("metadata_path") or "")).with_suffix("")) == stem_path
             ]
             if len(candidates) == 1:
                 element = _public_element_node(candidates[0])
@@ -1232,9 +1233,7 @@ class ProjectGraphService:
             "git_code": change.get("git_code"),
             "element": element,
             "mapping": mapping,
-            "mapping_confidence": (
-                "high" if mapping == "exact_graph_file_owner" else "medium" if element else None
-            ),
+            "mapping_confidence": ("high" if mapping == "exact_graph_file_owner" else "medium" if element else None),
         }
 
     @staticmethod
