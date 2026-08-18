@@ -2,6 +2,23 @@
 
 Проект следует [Semantic Versioning](https://semver.org/).
 
+## [0.20.0] - 2026-08-18
+
+- Добавлены prepare/execute tools для загрузки сборки, обновления, запуска и остановки приложения через точные
+  маршруты Console API Element `9.2.4-6`, а также bounded `wait_console_task`.
+- Управляемые действия выключены после установки. Локальный UI задаёт allowlist операций, UUID проектов и
+  приложений и каталоги сборок; агент не может менять эту политику через MCP tools.
+- Prepare возвращает точную цель, параметры, риски и одноразовый токен на пять минут. Токен связан с
+  precondition и отпечатком политики, хранится в памяти как SHA-256 и расходуется до внешнего запроса.
+- Загрузка проверяет обычный ZIP внутри разрешённого каталога, размер, корневой Project YAML, configuration ID и
+  SHA-256 до и во время execute. Update/start/stop повторно сверяют состояние Console перед записью.
+- POST и PUT выполняются один раз без автоматического retry. Неоднозначный результат возвращает read-only план
+  сверки и запрещает повторное использование токена.
+- Добавлен защищённый audit log с отдельной записью до сетевого изменения и redaction credentials. Approval
+  token, тело сборки и Console credentials в log не записываются.
+- Unit, UI и MCP protocol tests покрывают default deny, allowlist, expiry, replay, tampering, precondition,
+  ambiguous failure, exact request body, task polling и отсутствие секретов.
+
 ## [0.19.0] - 2026-08-18
 
 - Добавлены девять read-only tools для runtime health, процесса, диска, server logs, Application Event Log и

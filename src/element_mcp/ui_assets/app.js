@@ -45,6 +45,18 @@ const runtimePasswordHelp = document.querySelector("#runtime-password-help");
 const runtimeFeedback = document.querySelector("#runtime-feedback");
 const runtimeError = document.querySelector("#runtime-error");
 const runtimeSave = document.querySelector("#runtime-save");
+const actionsSummary = document.querySelector("#actions-summary");
+const actionsToggle = document.querySelector("#actions-toggle");
+const actionsSettings = document.querySelector("#actions-settings");
+const actionsEnabled = document.querySelector("#actions-enabled");
+const actionsFields = document.querySelector("#actions-fields");
+const actionInputs = [...document.querySelectorAll(".action-selection input[type='checkbox']")];
+const actionsProjectIds = document.querySelector("#actions-project-ids");
+const actionsApplicationIds = document.querySelector("#actions-application-ids");
+const actionsUploadRoots = document.querySelector("#actions-upload-roots");
+const actionsFeedback = document.querySelector("#actions-feedback");
+const actionsError = document.querySelector("#actions-error");
+const actionsSave = document.querySelector("#actions-save");
 
 let latestStatus = null;
 let initialVersion = null;
@@ -56,6 +68,8 @@ let consoleConfiguration = null;
 let consoleBusy = false;
 let runtimeConfiguration = null;
 let runtimeBusy = false;
+let actionsConfiguration = null;
+let actionsBusy = false;
 
 function sleep(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
@@ -429,6 +443,146 @@ async function saveRuntimeConfiguration() {
   }
 }
 
+function showActionsError(value, invalidField = null) {
+  actionsError.textContent = value;
+  actionsError.hidden = !value;
+  for (const input of [actionsProjectIds, actionsApplicationIds, actionsUploadRoots]) {
+    input.setAttribute("aria-invalid", input === invalidField ? "true" : "false");
+  }
+}
+
+function showActionsFeedback(value, state = "") {
+  actionsFeedback.textContent = value;
+  actionsFeedback.hidden = !value;
+  actionsFeedback.dataset.state = state;
+}
+
+function setActionsBusy(value, label = "") {
+  actionsBusy = value;
+  for (const input of [
+    actionsEnabled,
+    ...actionInputs,
+    actionsProjectIds,
+    actionsApplicationIds,
+    actionsUploadRoots,
+    actionsSave,
+  ]) {
+    input.disabled = value;
+  }
+  if (label) actionsSave.textContent = label;
+}
+
+function parseLines(value) {
+  return [...new Set(value.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean))];
+}
+
+function renderActionsConfiguration(payload) {
+  actionsConfiguration = payload;
+  const allowed = new Set(payload.allowed_actions || []);
+  actionsEnabled.checked = Boolean(payload.enabled);
+  for (const input of actionInputs) input.checked = allowed.has(input.value);
+  actionsProjectIds.value = (payload.allowed_project_ids || []).join("\n");
+  actionsApplicationIds.value = (payload.allowed_application_ids || []).join("\n");
+  actionsUploadRoots.value = (payload.upload_roots || []).join("\n");
+  actionsFields.hidden = !payload.enabled;
+  actionsSave.hidden = !payload.enabled;
+  actionsSummary.textContent =
+    payload.status === "invalid"
+      ? "Нужна настройка"
+      : payload.enabled
+        ? `Включены · ${allowed.size} оп.`
+        : "Выключены";
+  actionsSummary.title = payload.enabled
+    ? "Разрешены только перечисленные операции и UUID"
+    : "Запись в Console запрещена";
+  actionsToggle.textContent = actionsSettings.hidden ? "Настроить" : "Скрыть";
+}
+
+async function loadActionsConfiguration() {
+  try {
+    renderActionsConfiguration(await api("/api/actions/configuration"));
+  } catch (error) {
+    actionsSummary.textContent = "Недоступны";
+    showActionsError(error.message);
+  }
+}
+
+function validateActionsForm() {
+  const selected = actionInputs.filter((input) => input.checked).map((input) => input.value);
+  const projectIds = parseLines(actionsProjectIds.value);
+  const applicationIds = parseLines(actionsApplicationIds.value);
+  const uploadRoots = parseLines(actionsUploadRoots.value);
+  if (!selected.length) return ["Выберите хотя бы одну операцию.", null];
+  if (
+    selected.includes("upload_project_assembly") &&
+    (!projectIds.length || !uploadRoots.length)
+  ) {
+    return ["Для загрузки укажите UUID проекта и каталог со сборками.", !projectIds.length ? actionsProjectIds : actionsUploadRoots];
+  }
+  if (
+    selected.includes("update_application") &&
+    (!projectIds.length || !applicationIds.length)
+  ) {
+    return ["Для обновления укажите UUID проекта и приложения.", !projectIds.length ? actionsProjectIds : actionsApplicationIds];
+  }
+  if (
+    (selected.includes("start_application") || selected.includes("stop_application")) &&
+    !applicationIds.length
+  ) {
+    return ["Для запуска или остановки укажите UUID приложения.", actionsApplicationIds];
+  }
+  return [null, null];
+}
+
+async function saveActionsConfiguration(enabled = true) {
+  if (actionsBusy) return;
+  showActionsError("");
+  if (enabled) {
+    const [message, field] = validateActionsForm();
+    if (message) {
+      showActionsError(message, field);
+      field?.focus();
+      return;
+    }
+  }
+  showActionsFeedback(
+    enabled ? "Проверяем UUID, каталоги и сохраняем ограничения…" : "Запрещаем действия агента…",
+    "loading",
+  );
+  setActionsBusy(true, enabled ? "Сохраняем…" : "Выключаем…");
+  try {
+    const payload = await api("/api/actions/configuration", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        enabled,
+        allowed_actions: actionInputs.filter((input) => input.checked).map((input) => input.value),
+        allowed_project_ids: parseLines(actionsProjectIds.value),
+        allowed_application_ids: parseLines(actionsApplicationIds.value),
+        upload_roots: parseLines(actionsUploadRoots.value),
+        max_upload_bytes: actionsConfiguration?.max_upload_bytes || 512 * 1024 * 1024,
+        approval_ttl_seconds: actionsConfiguration?.approval_ttl_seconds || 300,
+      }),
+    });
+    renderActionsConfiguration(payload);
+    showActionsFeedback(
+      enabled
+        ? "Разрешения сохранены. Каждое действие всё равно потребует отдельного подтверждения."
+        : "Действия агента выключены. Сохранённые списки можно включить снова.",
+      "success",
+    );
+  } catch (error) {
+    actionsEnabled.checked = Boolean(actionsConfiguration?.enabled);
+    actionsFields.hidden = !actionsEnabled.checked;
+    actionsSave.hidden = !actionsEnabled.checked;
+    showActionsFeedback("");
+    showActionsError(error.message);
+  } finally {
+    setActionsBusy(false);
+    actionsSave.textContent = "Сохранить разрешения";
+  }
+}
+
 function setSourceEditor(updateSource) {
   if (!sourceDirty) {
     sourceInput.value = updateSource.kind === "local" ? updateSource.label : "";
@@ -738,9 +892,44 @@ runtimeSettings.addEventListener("submit", (event) => {
   saveRuntimeConfiguration();
 });
 
+actionsToggle.addEventListener("click", () => {
+  const open = actionsSettings.hidden;
+  actionsSettings.hidden = !open;
+  actionsToggle.setAttribute("aria-expanded", String(open));
+  actionsToggle.textContent = open ? "Скрыть" : "Настроить";
+  if (open) {
+    showActionsFeedback("");
+    showActionsError(actionsConfiguration?.status === "invalid" ? actionsConfiguration.message : "");
+    actionsEnabled.focus();
+  }
+});
+
+actionsEnabled.addEventListener("change", () => {
+  if (actionsEnabled.checked) {
+    actionsFields.hidden = false;
+    actionsSave.hidden = false;
+    showActionsError("");
+    showActionsFeedback(
+      "Выберите операции и точные цели, затем сохраните разрешения.",
+      "pending",
+    );
+    actionInputs[0]?.focus();
+  } else {
+    actionsFields.hidden = true;
+    actionsSave.hidden = true;
+    saveActionsConfiguration(false);
+  }
+});
+
+actionsSettings.addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveActionsConfiguration(true);
+});
+
 loadDocumentationStatus();
 loadConsoleConfiguration();
 loadRuntimeConfiguration();
+loadActionsConfiguration();
 
 api("/api/status")
   .then((payload) => {

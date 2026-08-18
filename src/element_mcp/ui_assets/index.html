@@ -82,6 +82,19 @@
               >Настроить</button>
             </dd>
           </div>
+          <div class="metadata-row">
+            <dt>Действия агента</dt>
+            <dd class="source-value">
+              <span id="actions-summary">—</span>
+              <button
+                id="actions-toggle"
+                class="text-action"
+                type="button"
+                aria-expanded="false"
+                aria-controls="actions-settings"
+              >Настроить</button>
+            </dd>
+          </div>
         </dl>
 
         <form id="documentation-settings" class="documentation-settings" hidden novalidate>
@@ -278,6 +291,95 @@
           <p id="runtime-feedback" class="source-feedback" role="status" aria-live="polite" hidden></p>
           <p id="runtime-error" class="source-error" role="alert" hidden></p>
           <button id="runtime-save" class="settings-action" type="submit">Сохранить настройки</button>
+        </form>
+
+        <form id="actions-settings" class="actions-settings" hidden novalidate>
+          <div class="settings-heading">
+            <div>
+              <h2>Управляемые действия</h2>
+              <p>Разрешают агенту изменять только перечисленные проекты и приложения через Console.</p>
+            </div>
+            <label class="switch-label" for="actions-enabled">
+              <input id="actions-enabled" name="actions-enabled" type="checkbox" role="switch">
+              <span>Разрешить</span>
+            </label>
+          </div>
+
+          <div id="actions-fields" hidden>
+            <fieldset class="action-selection">
+              <legend>Доступные операции</legend>
+              <label class="check-label" for="action-upload">
+                <input id="action-upload" type="checkbox" value="upload_project_assembly">
+                <span>Загружать сборки</span>
+              </label>
+              <label class="check-label" for="action-update">
+                <input id="action-update" type="checkbox" value="update_application">
+                <span>Обновлять приложения</span>
+              </label>
+              <label class="check-label" for="action-start">
+                <input id="action-start" type="checkbox" value="start_application">
+                <span>Запускать приложения</span>
+              </label>
+              <label class="check-label" for="action-stop">
+                <input id="action-stop" type="checkbox" value="stop_application">
+                <span>Останавливать приложения</span>
+              </label>
+            </fieldset>
+
+            <label for="actions-project-ids">Разрешённые UUID проектов</label>
+            <textarea
+              id="actions-project-ids"
+              name="actions-project-ids"
+              rows="3"
+              maxlength="8192"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="По одному UUID в строке"
+              aria-describedby="actions-project-help actions-feedback actions-error"
+            ></textarea>
+            <p id="actions-project-help" class="settings-help">
+              Нужны для загрузки сборок и обновления приложений.
+            </p>
+
+            <label for="actions-application-ids">Разрешённые UUID приложений</label>
+            <textarea
+              id="actions-application-ids"
+              name="actions-application-ids"
+              rows="3"
+              maxlength="8192"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="По одному UUID в строке"
+              aria-describedby="actions-application-help actions-feedback actions-error"
+            ></textarea>
+            <p id="actions-application-help" class="settings-help">
+              Нужны для обновления, запуска и остановки приложений.
+            </p>
+
+            <label for="actions-upload-roots">Каталоги со сборками</label>
+            <textarea
+              id="actions-upload-roots"
+              name="actions-upload-roots"
+              rows="3"
+              maxlength="12288"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="C:\Builds\Element"
+              aria-describedby="actions-roots-help actions-feedback actions-error"
+            ></textarea>
+            <p id="actions-roots-help" class="settings-help">
+              Агент сможет загружать ZIP-файлы только из этих каталогов. Укажите по одному полному пути в строке.
+            </p>
+
+            <p class="settings-help">
+              Перед каждой операцией MCP покажет точную цель и риски, дождётся отдельного подтверждения и выдаст
+              одноразовое разрешение на 5 минут. Запросы на изменение не повторяются автоматически.
+            </p>
+          </div>
+
+          <p id="actions-feedback" class="source-feedback" role="status" aria-live="polite" hidden></p>
+          <p id="actions-error" class="source-error" role="alert" hidden></p>
+          <button id="actions-save" class="settings-action" type="submit" hidden>Сохранить разрешения</button>
         </form>
 
         <div class="update-area">

@@ -39,7 +39,7 @@ def test_stdio_server_exposes_read_only_tools(
         ):
             initialized = await session.initialize()
             assert initialized.serverInfo.name == "1C Element"
-            assert initialized.serverInfo.version == "0.19.0"
+            assert initialized.serverInfo.version == "0.20.0"
             assert initialized.instructions is not None
             assert "first call\nget_documentation_status" in initialized.instructions
             assert "Never call start_documentation_build without that consent" in initialized.instructions
@@ -65,6 +65,8 @@ def test_stdio_server_exposes_read_only_tools(
             assert "use get_element_dependencies or get_project_dependency_graph" in initialized.instructions
             assert "Never\ndescribe graph output as compiler-proven" in initialized.instructions
             assert "Never launch or\nrecommend a second Git process inside Element IDE" in initialized.instructions
+            assert "first call get_managed_actions_status" in initialized.instructions
+            assert "Never retry a write" in initialized.instructions
             tools = await session.list_tools()
             names = {tool.name for tool in tools.tools}
             assert names == {
@@ -86,6 +88,7 @@ def test_stdio_server_exposes_read_only_tools(
                 "get_console_server_info",
                 "get_console_status",
                 "get_console_task",
+                "get_managed_actions_status",
                 "get_application",
                 "get_application_event",
                 "get_application_project",
@@ -125,6 +128,14 @@ def test_stdio_server_exposes_read_only_tools(
                 "get_project_assembly",
                 "read_project_file",
                 "read_server_log",
+                "prepare_upload_project_assembly",
+                "upload_project_assembly",
+                "prepare_update_application",
+                "update_application",
+                "prepare_application_state_change",
+                "start_application",
+                "stop_application",
+                "wait_console_task",
                 "search_application_events",
                 "search_docs",
                 "search_project_code",
@@ -150,6 +161,7 @@ def test_stdio_server_exposes_read_only_tools(
                 "get_console_server_info",
                 "get_console_status",
                 "get_console_task",
+                "get_managed_actions_status",
                 "get_application",
                 "get_application_event",
                 "get_application_project",
@@ -193,6 +205,7 @@ def test_stdio_server_exposes_read_only_tools(
                 "search_server_logs",
                 "trace_operation",
                 "validate_element_structure",
+                "wait_console_task",
             }
             for tool in tools.tools:
                 assert tool.annotations is not None
@@ -226,6 +239,8 @@ def test_stdio_server_exposes_read_only_tools(
             assert "resolved schemas" in (descriptions["get_api_operation"] or "")
             assert "evidence and confidence" in (descriptions["get_element_dependencies"] or "")
             assert "never proves safe deletion" in (descriptions["find_unused_project_elements"] or "")
+            assert "never uploads" in (descriptions["prepare_upload_project_assembly"] or "")
+            assert "explicit user confirmation" in (descriptions["upload_project_assembly"] or "")
 
             result = await session.call_tool("search_docs", {"query": "ВебМетод", "corpus": "lang"})
             assert result.isError is False
@@ -329,6 +344,11 @@ def test_stdio_server_exposes_read_only_tools(
             assert runtime.isError is False
             assert runtime.structuredContent is not None
             assert runtime.structuredContent["status"] == "missing"
+
+            managed = await session.call_tool("get_managed_actions_status", {})
+            assert managed.isError is False
+            assert managed.structuredContent is not None
+            assert managed.structuredContent["status"] == "disabled"
 
     asyncio.run(exercise_server())
 

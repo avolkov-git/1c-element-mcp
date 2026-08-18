@@ -44,17 +44,79 @@ def test_ui_reports_running_server_and_protects_mutations(tmp_path: Path) -> Non
         assert "MCP работает" in page.text
         assert "Каталог нормализованной документации" in page.text
         assert "Диагностика сервера Element" in page.text
+        assert "Управляемые действия" in page.text
         assert "frame-ancestors 'none'" in page.headers["content-security-policy"]
 
         status = client.get("/api/status")
         assert status.status_code == 200
-        assert status.json()["server"] == {"state": "running", "version": "0.19.0"}
+        assert status.json()["server"] == {"state": "running", "version": "0.20.0"}
 
         assert client.post("/api/updates/check").status_code == 403
         token = re.search(r'name="element-mcp-token" content="([^"]+)"', page.text).group(1)  # type: ignore[union-attr]
         check = client.post("/api/updates/check", headers={"X-Element-MCP-Token": token})
         assert check.status_code == 200
         assert check.json()["updates"]["state"] == "unavailable"
+
+
+def test_ui_configures_default_deny_managed_actions(tmp_path: Path) -> None:
+    upload_root = tmp_path / "builds"
+    upload_root.mkdir()
+    actions_config = tmp_path / "config" / "actions.json"
+    server = create_server(
+        ServerSettings(
+            data_path=tmp_path / "data",
+            config_path=tmp_path / "config" / "config.json",
+            actions_config_path=actions_config,
+            transport="streamable-http",
+            host="127.0.0.1",
+        )
+    )
+    payload = {
+        "enabled": True,
+        "allowed_actions": ["upload_project_assembly", "stop_application"],
+        "allowed_project_ids": ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"],
+        "allowed_application_ids": ["cccccccc-cccc-cccc-cccc-cccccccccccc"],
+        "upload_roots": [str(upload_root)],
+        "max_upload_bytes": 64 * 1024 * 1024,
+        "approval_ttl_seconds": 300,
+    }
+
+    with TestClient(server.streamable_http_app(), base_url="http://127.0.0.1") as client:
+        page = client.get("/")
+        token = re.search(r'name="element-mcp-token" content="([^"]+)"', page.text).group(1)  # type: ignore[union-attr]
+        disabled = client.get("/api/actions/configuration")
+        assert disabled.status_code == 200
+        assert disabled.json()["status"] == "disabled"
+        assert client.post("/api/actions/configuration", json=payload).status_code == 403
+
+        saved = client.post(
+            "/api/actions/configuration",
+            json=payload,
+            headers={"X-Element-MCP-Token": token},
+        )
+        assert saved.status_code == 200
+        assert saved.json()["status"] == "enabled"
+        assert saved.json()["allowed_actions"] == ["stop_application", "upload_project_assembly"]
+
+        invalid = client.post(
+            "/api/actions/configuration",
+            json={**payload, "allowed_application_ids": ["not-a-uuid"]},
+            headers={"X-Element-MCP-Token": token},
+        )
+        assert invalid.status_code == 400
+        assert "UUID" in invalid.json()["message"]
+
+        turned_off = client.post(
+            "/api/actions/configuration",
+            json={**payload, "enabled": False},
+            headers={"X-Element-MCP-Token": token},
+        )
+        assert turned_off.status_code == 200
+        assert turned_off.json()["status"] == "disabled"
+
+    persisted = json.loads(actions_config.read_text(encoding="utf-8"))
+    assert persisted["enabled"] is False
+    assert persisted["allowed_project_ids"] == ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"]
 
 
 def test_ui_can_persist_local_update_source(tmp_path: Path) -> None:

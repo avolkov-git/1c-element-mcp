@@ -64,6 +64,7 @@ select {
 .source-settings,
 .console-settings,
 .runtime-settings,
+.actions-settings,
 .update-area {
   padding-inline: clamp(24px, 6vw, 40px);
 }
@@ -190,7 +191,8 @@ h1 {
 .documentation-settings,
 .source-settings,
 .console-settings,
-.runtime-settings {
+.runtime-settings,
+.actions-settings {
   padding-block: 24px;
   border-top: 1px solid var(--border);
 }
@@ -199,7 +201,8 @@ h1 {
 .source-settings label,
 .console-settings fieldset > label,
 .runtime-settings > label,
-#runtime-manager-fields > label {
+#runtime-manager-fields > label,
+#actions-fields > label {
   display: block;
   margin-bottom: 8px;
   font-weight: 650;
@@ -209,7 +212,8 @@ h1 {
 .source-settings input,
 .console-settings fieldset > input,
 .runtime-settings > input,
-#runtime-manager-fields > input:not([type="checkbox"]) {
+#runtime-manager-fields > input:not([type="checkbox"]),
+.actions-settings textarea {
   width: 100%;
   min-height: 48px;
   padding: 11px 12px;
@@ -371,6 +375,50 @@ h1 {
   margin-top: 18px;
 }
 
+#actions-fields {
+  margin-top: 20px;
+}
+
+#actions-fields > label:not(:first-of-type) {
+  margin-top: 18px;
+}
+
+.actions-settings textarea {
+  resize: vertical;
+  min-height: 84px;
+  line-height: 1.45;
+}
+
+.actions-settings textarea::placeholder {
+  color: var(--muted);
+  opacity: 1;
+}
+
+.actions-settings textarea[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.action-selection {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 12px;
+  min-width: 0;
+  margin: 0 0 18px;
+  padding: 0;
+  border: 0;
+}
+
+.action-selection legend {
+  grid-column: 1 / -1;
+  margin-bottom: 6px;
+  padding: 0;
+  font-weight: 650;
+}
+
+.action-selection .check-label {
+  margin-block: 0;
+}
+
 .check-label {
   display: inline-flex;
   align-items: center;
@@ -462,7 +510,9 @@ h1 {
 .documentation-settings input:focus-visible,
 .source-settings input:focus-visible,
 .console-settings input:focus-visible,
-.runtime-settings input:focus-visible {
+.runtime-settings input:focus-visible,
+.actions-settings input:focus-visible,
+.actions-settings textarea:focus-visible {
   outline: 3px solid color-mix(in oklch, var(--focus), transparent 35%);
   outline-offset: 2px;
 }
@@ -471,7 +521,8 @@ h1 {
 .source-settings input:focus-visible,
 .console-settings fieldset > input:focus-visible,
 .runtime-settings > input:focus-visible,
-#runtime-manager-fields > input:focus-visible {
+#runtime-manager-fields > input:focus-visible,
+.actions-settings textarea:focus-visible {
   border-color: var(--focus);
 }
 
@@ -508,6 +559,7 @@ h1 {
     .source-settings,
     .console-settings,
     .runtime-settings,
+    .actions-settings,
     .update-area {
     padding-inline: 22px;
   }
@@ -535,6 +587,18 @@ h1 {
 
   .text-action {
     margin-left: -10px;
+  }
+
+  .action-selection {
+    grid-template-columns: 1fr;
+  }
+
+  .documentation-settings input,
+  .source-settings input,
+  .console-settings input,
+  .runtime-settings input,
+  .actions-settings textarea {
+    font-size: 1rem;
   }
 }
 

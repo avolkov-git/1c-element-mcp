@@ -202,6 +202,27 @@ class ConsoleHttpClient:
                 self.sleeper(self.retry_delays[attempt])
         raise AssertionError("unreachable")
 
+    def mutate(
+        self,
+        connection: ConsoleConnection,
+        method: Literal["POST", "PUT"],
+        path: str,
+        *,
+        body: bytes | None = None,
+        content_type: str | None = "application/json",
+    ) -> Any:
+        """Send one non-retried write request; an ambiguous outcome is left to the caller to reconcile."""
+        headers = {"Authorization": f"Bearer {self._access_token(connection)}"}
+        if body is not None and content_type:
+            headers["Content-Type"] = content_type
+        try:
+            return self._request(connection, method, path, headers=headers, body=body)
+        except ConsoleRequestError as error:
+            if error.status_code == 401 and connection.auth_kind == "client_credentials":
+                with self._lock:
+                    self._tokens.pop(_connection_fingerprint(connection), None)
+            raise
+
     def clear_tokens(self) -> None:
         with self._lock:
             self._tokens.clear()

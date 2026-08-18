@@ -47,6 +47,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path(value) if (value := os.environ.get("ELEMENT_RUNTIME_CONFIG_PATH")) else None,
     )
     parser.add_argument(
+        "--actions-config-path",
+        type=Path,
+        default=Path(value) if (value := os.environ.get("ELEMENT_ACTIONS_CONFIG_PATH")) else None,
+    )
+    parser.add_argument(
         "--ide-settings-path",
         type=Path,
         default=Path(value) if (value := os.environ.get("ELEMENT_IDE_SETTINGS_PATH")) else None,
@@ -107,6 +112,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         java_path=args.java_path.expanduser().resolve() if args.java_path else None,
         console_config_path=(args.console_config_path.expanduser().resolve() if args.console_config_path else None),
         runtime_config_path=(args.runtime_config_path.expanduser().resolve() if args.runtime_config_path else None),
+        actions_config_path=(args.actions_config_path.expanduser().resolve() if args.actions_config_path else None),
         ide_settings_path=args.ide_settings_path.expanduser().resolve() if args.ide_settings_path else None,
         config_path=args.config_path.expanduser().resolve() if args.config_path else None,
         data_path=args.data_path.expanduser().resolve() if args.data_path else None,

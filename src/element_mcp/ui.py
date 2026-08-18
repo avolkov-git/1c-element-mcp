@@ -10,6 +10,7 @@ import anyio
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 
+from element_mcp.actions import ManagedActionError, ManagedActionsService
 from element_mcp.config import ConfigurationError, ServerSettings
 from element_mcp.console import ConsoleConfigurationError, ConsoleRequestError, ConsoleService
 from element_mcp.corpus import CorpusError
@@ -31,6 +32,7 @@ def register_ui(
     console: ConsoleService,
     project: ProjectService,
     runtime: RuntimeDiagnosticsService,
+    actions: ManagedActionsService,
 ) -> None:
     allowed_hosts = {"127.0.0.1", "localhost", "::1", settings.host.lower()}
 
@@ -270,6 +272,56 @@ def register_ui(
             )
             result = await anyio.to_thread.run_sync(operation)
         except RuntimeConfigurationError as error:
+            return JSONResponse({"status": "invalid", "message": str(error)}, status_code=400)
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+    @server.custom_route("/api/actions/configuration", methods=["GET", "POST"], include_in_schema=False)
+    async def configure_managed_actions(request: Request) -> Response:
+        if request.method == "GET":
+            if not host_allowed(request):
+                return Response(status_code=403)
+            return JSONResponse(actions.configuration_info(), headers={"Cache-Control": "no-store"})
+        if not mutation_allowed(request):
+            return JSONResponse({"message": "Недопустимый локальный запрос"}, status_code=403)
+        try:
+            content_length = int(request.headers.get("content-length", "0") or 0)
+        except ValueError:
+            return JSONResponse({"message": "Некорректная длина запроса"}, status_code=400)
+        if content_length <= 0 or content_length > 32 * 1024:
+            return JSONResponse({"message": "Некорректный размер настроек действий"}, status_code=413)
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"message": "Настройки действий должны быть JSON-объектом"}, status_code=400)
+        list_fields = (
+            "allowed_actions",
+            "allowed_project_ids",
+            "allowed_application_ids",
+            "upload_roots",
+        )
+        if not isinstance(payload, dict) or not isinstance(payload.get("enabled"), bool):
+            return JSONResponse({"message": "Поле enabled должно быть логическим"}, status_code=400)
+        if any(not isinstance(payload.get(key), list) for key in list_fields):
+            return JSONResponse({"message": "Списки разрешений должны быть массивами"}, status_code=400)
+        if any(
+            not isinstance(item, str)
+            for key in list_fields
+            for item in payload.get(key, [])
+        ):
+            return JSONResponse({"message": "Значения разрешений должны быть строками"}, status_code=400)
+        try:
+            operation = partial(
+                actions.configure,
+                enabled=payload["enabled"],
+                allowed_actions=payload["allowed_actions"],
+                allowed_project_ids=payload["allowed_project_ids"],
+                allowed_application_ids=payload["allowed_application_ids"],
+                upload_roots=payload["upload_roots"],
+                max_upload_bytes=payload.get("max_upload_bytes", 512 * 1024 * 1024),
+                approval_ttl_seconds=payload.get("approval_ttl_seconds", 300),
+            )
+            result = await anyio.to_thread.run_sync(operation)
+        except ManagedActionError as error:
             return JSONResponse({"status": "invalid", "message": str(error)}, status_code=400)
         return JSONResponse(result, headers={"Cache-Control": "no-store"})
 

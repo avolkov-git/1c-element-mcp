@@ -30,6 +30,7 @@ One responsive column capped near 560px. A single bordered surface groups the st
 - Documentation editor: the active corpus path is visible in metadata; an inline disclosure validates and connects a new absolute path without replacing a working corpus on failure. Paths fixed by startup arguments or environment stay read-only and explain where to change them.
 - Update source editor: a progressively disclosed, explicitly labelled path field with inline validation. A changed path makes the primary action say “save and check”; returning to `origin` applies immediately with loading and completion feedback.
 - Remote Console editor: a progressively disclosed switch plus URL, Client ID, and password field. Enabling validates the credentials before persistence; disabling is immediate and keeps the protected secret for a reversible return. The saved secret is represented only by an empty field and explanatory placeholder.
+- Managed actions editor: a separate disclosure with a master switch, four plain-language operation checkboxes, exact project/application UUID lists, and upload roots. Disabling takes effect immediately. Enabling requires a deliberate save after all required restrictions pass validation.
 - Update state: an `aria-live` message with current, available, checking, applying, or unavailable copy.
 - Primary button: one 48px control whose label changes with context. It has hover, focus-visible, active, disabled, loading, success, and error states.
 

@@ -7,6 +7,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from element_mcp import __version__
+from element_mcp.actions import ManagedActionsService
 from element_mcp.config import ServerSettings
 from element_mcp.console import ConsoleService
 from element_mcp.documentation import DocumentationService
@@ -34,6 +35,18 @@ LOCAL_IDEMPOTENT_WRITE = ToolAnnotations(
     openWorldHint=False,
 )
 CANCEL_JOB = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False)
+EXTERNAL_WRITE = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
+    openWorldHint=True,
+)
+EXTERNAL_DESTRUCTIVE_WRITE = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=False,
+    openWorldHint=True,
+)
 
 SERVER_INSTRUCTIONS = """
 For every question about normalized 1C:Enterprise.Element documentation, first call
@@ -129,6 +142,15 @@ application_id only in an active Element IDE session. Application Manager creden
 local MCP UI or process environment and must never appear in chat or tool arguments. Use trace_operation only for
 exact task/application/trace/request/operation identifiers; preserve source and gaps and never correlate entries
 merely because their text looks similar. All diagnostic output is bounded and redacted.
+
+For managed Console writes, first call get_managed_actions_status. These actions are disabled by default and
+restricted by exact project/application UUID allowlists configured in the local UI. Always call the matching
+prepare tool first. Show its exact action, target, risks, and expiration to the user, then wait for a new explicit
+confirmation in a later turn. Never treat a request to inspect or prepare as permission to execute. After that
+confirmation, pass the one-time approval token only to the matching execute tool. A consumed or expired token is
+never reusable. Never retry a write, including after an authentication or network error. If the outcome is
+unknown, use the returned read-only reconciliation tools. If a response includes task_id, use wait_console_task;
+do not repeat the write while waiting. Upload, update, start, and stop are supported; deletion is not.
 """.strip()
 
 
@@ -140,6 +162,7 @@ def create_server(settings: ServerSettings) -> FastMCP:
     language_server = LanguageServerService(settings, project, semantic)
     console = ConsoleService(settings)
     runtime = RuntimeDiagnosticsService(settings, console)
+    actions = ManagedActionsService(settings, console)
     updates = UpdateService(settings)
     server = FastMCP(
         name="1C Element",
@@ -152,7 +175,7 @@ def create_server(settings: ServerSettings) -> FastMCP:
     # FastMCP 1.x does not expose the low-level server version in its constructor.
     # Without this assignment clients would see the SDK version instead of our SemVer.
     server._mcp_server.version = __version__
-    register_ui(server, settings, updates, documentation, console, project, runtime)
+    register_ui(server, settings, updates, documentation, console, project, runtime, actions)
 
     @server.tool(annotations=READ_ONLY, structured_output=True)
     def get_corpus_info() -> dict[str, Any]:
@@ -387,6 +410,91 @@ def create_server(settings: ServerSettings) -> FastMCP:
     ) -> dict[str, Any]:
         """Read one application, deployment-instance, or group task by exact UUID."""
         return console.get_task(task_type, task_id)
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def get_managed_actions_status() -> dict[str, Any]:
+        """Call before any Console write to inspect the local default-deny policy without exposing secrets."""
+        return {"server_version": __version__, **actions.configuration_info()}
+
+    @server.tool(annotations=LOCAL_WRITE, structured_output=True)
+    def prepare_upload_project_assembly(
+        project_id: Annotated[str, Field(min_length=1, max_length=64)],
+        file_path: Annotated[str, Field(min_length=1, max_length=4096)],
+        expected_configuration_id: Annotated[str | None, Field(max_length=64)] = None,
+    ) -> dict[str, Any]:
+        """Validate an allowlisted local assembly and return an exact preview; this never uploads it."""
+        return actions.prepare_upload_project_assembly(
+            project_id=project_id,
+            file_path=file_path,
+            expected_configuration_id=expected_configuration_id,
+        )
+
+    @server.tool(annotations=EXTERNAL_WRITE, structured_output=True)
+    def upload_project_assembly(
+        approval_token: Annotated[str, Field(min_length=20, max_length=200)],
+    ) -> dict[str, Any]:
+        """Upload once, only after explicit user confirmation of the matching prepare preview in a later turn."""
+        return actions.upload_project_assembly(approval_token)
+
+    @server.tool(annotations=LOCAL_WRITE, structured_output=True)
+    def prepare_update_application(
+        application_id: Annotated[str, Field(min_length=1, max_length=64)],
+        project_id: Annotated[str, Field(min_length=1, max_length=64)],
+        assembly_version: Annotated[str, Field(min_length=1, max_length=300)],
+    ) -> dict[str, Any]:
+        """Resolve an allowlisted application and assembly into a preview; this never updates the application."""
+        return actions.prepare_update_application(
+            application_id=application_id,
+            project_id=project_id,
+            assembly_version=assembly_version,
+        )
+
+    @server.tool(annotations=EXTERNAL_WRITE, structured_output=True)
+    def update_application(
+        approval_token: Annotated[str, Field(min_length=20, max_length=200)],
+    ) -> dict[str, Any]:
+        """Update once, only after explicit user confirmation of the matching prepare preview in a later turn."""
+        return actions.update_application(approval_token)
+
+    @server.tool(annotations=LOCAL_WRITE, structured_output=True)
+    def prepare_application_state_change(
+        application_id: Annotated[str, Field(min_length=1, max_length=64)],
+        desired_state: Literal["start", "stop"],
+    ) -> dict[str, Any]:
+        """Return an exact start/stop preview for an allowlisted application; this never changes its state."""
+        return actions.prepare_application_state_change(
+            application_id=application_id,
+            desired_state=desired_state,
+        )
+
+    @server.tool(annotations=EXTERNAL_WRITE, structured_output=True)
+    def start_application(
+        approval_token: Annotated[str, Field(min_length=20, max_length=200)],
+    ) -> dict[str, Any]:
+        """Start once, only after explicit user confirmation of the matching prepare preview in a later turn."""
+        return actions.start_application(approval_token)
+
+    @server.tool(annotations=EXTERNAL_DESTRUCTIVE_WRITE, structured_output=True)
+    def stop_application(
+        approval_token: Annotated[str, Field(min_length=20, max_length=200)],
+    ) -> dict[str, Any]:
+        """Stop once, only after explicit user confirmation of the matching prepare preview in a later turn."""
+        return actions.stop_application(approval_token)
+
+    @server.tool(annotations=EXTERNAL_READ_ONLY, structured_output=True)
+    def wait_console_task(
+        task_id: Annotated[str, Field(min_length=1, max_length=64)],
+        task_type: Literal["application", "deployment_instance", "group"] = "application",
+        timeout_seconds: Annotated[float, Field(ge=0, le=120)] = 30,
+        initial_interval_seconds: Annotated[float, Field(ge=0.1, le=5)] = 0.5,
+    ) -> dict[str, Any]:
+        """Poll one existing Console task without retrying or repeating the write that created it."""
+        return actions.wait_console_task(
+            task_id=task_id,
+            task_type=task_type,
+            timeout_seconds=timeout_seconds,
+            initial_interval_seconds=initial_interval_seconds,
+        )
 
     @server.tool(annotations=EXTERNAL_READ_ONLY, structured_output=True)
     def match_console_project(
