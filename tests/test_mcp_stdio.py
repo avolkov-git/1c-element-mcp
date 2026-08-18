@@ -34,7 +34,7 @@ def test_stdio_server_exposes_read_only_tools(
         ):
             initialized = await session.initialize()
             assert initialized.serverInfo.name == "1C Element"
-            assert initialized.serverInfo.version == "0.16.0"
+            assert initialized.serverInfo.version == "0.17.0"
             assert initialized.instructions is not None
             assert "first call\nget_documentation_status" in initialized.instructions
             assert "Never call start_documentation_build without that consent" in initialized.instructions
@@ -52,10 +52,14 @@ def test_stdio_server_exposes_read_only_tools(
             assert "If exact tools report a lexical fallback" in initialized.instructions
             assert "call get_current_application" in initialized.instructions
             assert "Do not infer\na current application in ordinary VS Code" in initialized.instructions
+            assert "use get_element_dependencies or get_project_dependency_graph" in initialized.instructions
+            assert "Never\ndescribe graph output as compiler-proven" in initialized.instructions
+            assert "Never launch or\nrecommend a second Git process inside Element IDE" in initialized.instructions
             tools = await session.list_tools()
             names = {tool.name for tool in tools.tools}
             assert names == {
                 "activate_documentation",
+                "analyze_change_impact",
                 "cancel_documentation_build",
                 "connect_project",
                 "configure_language_server",
@@ -80,15 +84,19 @@ def test_stdio_server_exposes_read_only_tools(
                 "get_document",
                 "get_documentation_build_status",
                 "get_documentation_status",
+                "get_element_dependencies",
                 "get_definition",
                 "get_language_server_status",
                 "get_project_overview",
                 "get_project_status",
                 "get_project_diagnostics",
+                "get_project_dependency_graph",
                 "get_references",
                 "get_related_docs",
                 "lookup_symbol",
                 "find_references",
+                "find_unused_project_elements",
+                "get_changed_elements",
                 "list_project_elements",
                 "list_console_spaces",
                 "list_console_tasks",
@@ -102,9 +110,13 @@ def test_stdio_server_exposes_read_only_tools(
                 "search_docs",
                 "search_project_code",
                 "start_documentation_build",
+                "validate_element_structure",
             }
             read_only = {
+                "analyze_change_impact",
                 "discover_element_installations",
+                "find_unused_project_elements",
+                "get_changed_elements",
                 "get_corpus_info",
                 "list_reference_datasets",
                 "query_reference",
@@ -125,11 +137,13 @@ def test_stdio_server_exposes_read_only_tools(
                 "get_document",
                 "get_documentation_build_status",
                 "get_documentation_status",
+                "get_element_dependencies",
                 "get_definition",
                 "get_language_server_status",
                 "get_project_overview",
                 "get_project_status",
                 "get_project_diagnostics",
+                "get_project_dependency_graph",
                 "get_references",
                 "get_related_docs",
                 "lookup_symbol",
@@ -146,6 +160,7 @@ def test_stdio_server_exposes_read_only_tools(
                 "read_project_file",
                 "search_docs",
                 "search_project_code",
+                "validate_element_structure",
             }
             for tool in tools.tools:
                 assert tool.annotations is not None
@@ -171,6 +186,8 @@ def test_stdio_server_exposes_read_only_tools(
             assert "published by Element LSP" in (descriptions["get_project_diagnostics"] or "")
             assert "structured datasets" in (descriptions["list_reference_datasets"] or "")
             assert "resolved schemas" in (descriptions["get_api_operation"] or "")
+            assert "evidence and confidence" in (descriptions["get_element_dependencies"] or "")
+            assert "never proves safe deletion" in (descriptions["find_unused_project_elements"] or "")
 
             result = await session.call_tool("search_docs", {"query": "ВебМетод", "corpus": "lang"})
             assert result.isError is False
@@ -194,6 +211,20 @@ def test_stdio_server_exposes_read_only_tools(
             assert overview.isError is False
             assert overview.structuredContent is not None
             assert overview.structuredContent["project"]["name"] == "ExampleProject"
+
+            graph = await session.call_tool("get_element_dependencies", {"identifier": "Orders"})
+            assert graph.isError is False
+            assert graph.structuredContent is not None
+            assert graph.structuredContent["status"] == "ready"
+            assert graph.structuredContent["semantic_guarantee"] is False
+
+            changed = await session.call_tool(
+                "get_changed_elements",
+                {"changed_paths": ["Sales/Orders.xbsl"]},
+            )
+            assert changed.isError is False
+            assert changed.structuredContent is not None
+            assert changed.structuredContent["changes"][0]["element"]["name"] == "Orders"
 
             symbols = await session.call_tool("lookup_symbol", {"name": "FindOrder"})
             assert symbols.isError is False

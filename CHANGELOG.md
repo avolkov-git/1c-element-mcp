@@ -2,6 +2,23 @@
 
 Проект следует [Semantic Versioning](https://semver.org/).
 
+## [0.17.0] - 2026-08-18
+
+- Добавлен инкрементальный граф YAML-элементов, companion XBSL/XBQL, подсистем, environment, visibility и
+  объявлений XBSL.
+- Явные imports/Using, YAML UUID/type/handler и lexical references представлены разными рёбрами с evidence,
+  confidence и resolution; граф не выдаётся за результат компилятора.
+- Добавлены `get_element_dependencies`, `get_project_dependency_graph` и объяснимый обратный
+  `analyze_change_impact` с лимитами глубины, узлов и рёбер.
+- Добавлен `get_changed_elements`: локальный VS Code использует read-only Git status, а Element IDE честно
+  запрашивает diff paths, которых нет в штатном `g5rt.team.status`, и не запускает второй Git.
+- Добавлены структурная проверка imports, handlers, UUID, неоднозначных имён, orphan-файлов и циклов, а также
+  осторожный low-confidence поиск кандидатов на неиспользуемые элементы.
+- Произвольные YAML/XBSL внутри специальных каталогов `Resources`/`Ресурсы` больше не принимаются за живые
+  элементы; лексический анализ корректно продолжает работу после строк с вложенной интерполяцией.
+- Кэш повторно разбирает только изменённые файлы; path/symlink boundaries, удаление/rename, большие циклы и
+  bounded responses покрыты unit и настоящими MCP protocol tests.
+
 ## [0.16.0] - 2026-08-18
 
 - Добавлен `get_console_server_info`: health, доступность API v2, capability map и честное разделение версии

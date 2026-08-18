@@ -152,6 +152,8 @@ def _code_masks(text: str) -> list[list[bool]]:
     masks: list[list[bool]] = []
     in_block_comment = False
     in_string = False
+    interpolation_depth = 0
+    interpolation_string = False
     for line in text.splitlines():
         mask = [True] * len(line)
         index = 0
@@ -166,10 +168,47 @@ def _code_masks(text: str) -> list[list[bool]]:
                 else:
                     index += 1
                 continue
+            if interpolation_string:
+                mask[index] = False
+                if line[index] == "\\" and index + 1 < len(line):
+                    mask[index + 1] = False
+                    index += 2
+                elif line[index] == '"':
+                    interpolation_string = False
+                    index += 1
+                else:
+                    index += 1
+                continue
+            if interpolation_depth:
+                if line.startswith("//", index):
+                    for comment_index in range(index, len(line)):
+                        mask[comment_index] = False
+                    break
+                if line.startswith("/*", index):
+                    mask[index] = False
+                    if index + 1 < len(line):
+                        mask[index + 1] = False
+                    in_block_comment = True
+                    index += 2
+                    continue
+                if line[index] == '"':
+                    mask[index] = False
+                    interpolation_string = True
+                elif line[index] == "{":
+                    interpolation_depth += 1
+                elif line[index] == "}":
+                    mask[index] = False
+                    interpolation_depth -= 1
+                index += 1
+                continue
             if in_string:
                 mask[index] = False
                 if line[index] == "\\" and index + 1 < len(line):
                     mask[index + 1] = False
+                    index += 2
+                elif index + 1 < len(line) and line[index] in {"$", "%"} and line[index + 1] == "{":
+                    mask[index + 1] = False
+                    interpolation_depth = 1
                     index += 2
                 elif line[index] == '"':
                     in_string = False

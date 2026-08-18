@@ -17,6 +17,7 @@ ProjectFileType = Literal["all", "metadata", "xbsl", "xbql"]
 ROOT_MANIFESTS = ("Project.yaml", "Проект.yaml")
 SUBSYSTEM_MANIFESTS = ("Subsystem.yaml", "Подсистема.yaml")
 RESOURCE_MANIFESTS = ("Resources.yaml", "Ресурсы.yaml")
+RESOURCE_DIRECTORIES = frozenset({"resources", "ресурсы"})
 TEXT_SOURCE_EXTENSIONS = frozenset({".yaml", ".yml", ".xbsl", ".xbql"})
 SEARCH_EXTENSIONS = {
     "all": TEXT_SOURCE_EXTENSIONS,
@@ -118,7 +119,16 @@ def _project_metadata(root: Path) -> dict[str, Any]:
     }
 
 
-def _is_element_metadata(path: Path) -> bool:
+def _is_resource_payload(relative_path: str) -> bool:
+    path = Path(relative_path)
+    return path.name not in RESOURCE_MANIFESTS and any(
+        part.casefold() in RESOURCE_DIRECTORIES for part in path.parts[:-1]
+    )
+
+
+def _is_element_metadata(path: Path, root: Path) -> bool:
+    if _is_resource_payload(_relative(root, path)):
+        return False
     if path.name in (*ROOT_MANIFESTS, *SUBSYSTEM_MANIFESTS, *RESOURCE_MANIFESTS):
         return True
     try:
@@ -504,7 +514,7 @@ class ProjectService:
         for path in _iter_files(root):
             if path.suffix.lower() not in SEARCH_EXTENSIONS[file_type]:
                 continue
-            if path.suffix.lower() in {".yaml", ".yml"} and not _is_element_metadata(path):
+            if path.suffix.lower() in {".yaml", ".yml"} and not _is_element_metadata(path, root):
                 continue
             try:
                 text, _ = _read_source_text(path)
@@ -692,13 +702,17 @@ class ProjectService:
             raise ProjectError(f"Файл проекта не найден: {relative_path}")
         if path.suffix.lower() not in TEXT_SOURCE_EXTENSIONS:
             raise ProjectError("Через MCP можно читать только исходные файлы Element: .yaml, .yml, .xbsl и .xbql")
-        if path.suffix.lower() in {".yaml", ".yml"} and not _is_element_metadata(path):
+        if path.suffix.lower() in {".yaml", ".yml"} and not _is_element_metadata(path, root):
             raise ProjectError(f"YAML-файл не является метаданными элемента проекта: {relative_path}")
         return path
 
     @staticmethod
     def _elements(root: Path, files: list[Path]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
-        yaml_files = [path for path in files if path.suffix.lower() in {".yaml", ".yml"}]
+        yaml_files = [
+            path
+            for path in files
+            if path.suffix.lower() in {".yaml", ".yml"} and not _is_resource_payload(_relative(root, path))
+        ]
         subsystem_directories = {path.parent for path in yaml_files if path.name in SUBSYSTEM_MANIFESTS}
         source_files_by_directory: dict[Path, list[Path]] = {}
         for path in files:

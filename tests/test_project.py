@@ -368,6 +368,56 @@ def test_find_references_excludes_comments_strings_and_honors_file_scope(
     assert result["results"][0]["line"] == 7
 
 
+def test_string_interpolation_does_not_hide_following_declarations(
+    tmp_path: Path,
+    element_project_path: Path,
+    corpus_path: Path,
+) -> None:
+    module = element_project_path / "Sales" / "Orders.xbsl"
+    module.write_text(
+        "method BeforeInterpolation()\n"
+        '    val Message = "Text ${Flag ? "yes" : "no"}"\n'
+        ";\n"
+        "method AfterInterpolation()\n"
+        ";\n",
+        encoding="utf-8",
+    )
+    semantic = semantic_service(tmp_path, element_project_path, corpus_path)
+
+    declaration = semantic.lookup_symbol("AfterInterpolation")
+    expression = semantic.find_references("Flag", relative_path="Sales/Orders.xbsl")
+
+    assert declaration["resolution"] == "exact"
+    assert declaration["matches"][0]["declaration"]["line"] == 4
+    assert expression["reference_count"] == 1
+    assert expression["results"][0]["line"] == 2
+
+
+def test_resource_payload_yaml_is_not_treated_as_project_metadata(
+    tmp_path: Path,
+    element_project_path: Path,
+) -> None:
+    resources = element_project_path / "Sales" / "Resources"
+    resources.mkdir()
+    (resources / "Resources.yaml").write_text("VisibilityScope: InSubsystem\n", encoding="utf-8")
+    (resources / "Template.yaml").write_text(
+        "ElementKind: Structure\nName: Orders\nSecretMarker: value\n",
+        encoding="utf-8",
+    )
+    (resources / "Template.xbsl").write_text("method EmbeddedTemplate()\n;\n", encoding="utf-8")
+    project = service(tmp_path, element_project_path)
+
+    overview = project.overview()
+    templates = project.list_elements(query="Template")
+    search = project.search("SecretMarker", file_type="metadata")
+
+    assert overview["elements"]["total"] == 5
+    assert templates["total"] == 0
+    assert search["count"] == 0
+    with pytest.raises(ProjectError, match="не является метаданными"):
+        project.read_file("Sales/Resources/Template.yaml")
+
+
 def test_related_docs_enriches_search_with_symbol_and_file_context(
     tmp_path: Path,
     element_project_path: Path,

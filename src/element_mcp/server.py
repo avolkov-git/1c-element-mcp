@@ -10,6 +10,7 @@ from element_mcp import __version__
 from element_mcp.config import ServerSettings
 from element_mcp.console import ConsoleService
 from element_mcp.documentation import DocumentationService
+from element_mcp.graph import ProjectGraphService
 from element_mcp.installation import discover_element_installations as find_element_installations
 from element_mcp.language_server import LanguageServerService
 from element_mcp.project import ProjectService
@@ -70,6 +71,15 @@ but lexical, not a compiler or Element Language Server: preserve ambiguity and n
 reference as proven symbol resolution. Use get_related_docs to turn a symbol or project file into a documentation
 query, then call get_document for the selected chunk.
 
+For dependency and pre-edit impact questions, use get_element_dependencies or get_project_dependency_graph, then
+analyze_change_impact. Every graph edge carries its evidence, confidence, and resolution mode. Explicit metadata,
+companion, import, UUID, and YAML edges are structural evidence; lexical edges are possible references only. Never
+describe graph output as compiler-proven. Use validate_element_structure for bounded structural checks and treat
+find_unused_project_elements as review candidates, never as permission to delete. Use get_changed_elements to map
+local VS Code Git changes. In Element IDE, the official g5rt.team.status handoff has only a modified summary: if
+paths_required is returned, ask for current diff paths and call the tool again with changed_paths. Never launch or
+recommend a second Git process inside Element IDE.
+
 For compiler-level navigation and diagnostics, first call get_language_server_status. If it is ready, prefer
 get_definition, get_references, and get_project_diagnostics over lexical tools. These tools start the official
 Element Language Server lazily and keep one isolated process for the active project. Preserve analysis_mode,
@@ -110,6 +120,7 @@ a current application in ordinary VS Code from the project name, source tree, or
 def create_server(settings: ServerSettings) -> FastMCP:
     documentation = DocumentationService(settings)
     project = ProjectService(settings)
+    graph = ProjectGraphService(project)
     semantic = SemanticService(project, documentation)
     language_server = LanguageServerService(settings, project, semantic)
     console = ConsoleService(settings)
@@ -419,6 +430,87 @@ def create_server(settings: ServerSettings) -> FastMCP:
     ) -> dict[str, Any]:
         """Read bounded lines from an Element source file by a relative path returned by project tools."""
         return project.read_file(relative_path, start_line=start_line, line_count=line_count)
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def get_element_dependencies(
+        identifier: Annotated[str, Field(min_length=1, max_length=1024)],
+        direction: Literal["outgoing", "incoming", "both"] = "both",
+        depth: Annotated[int, Field(ge=1, le=5)] = 2,
+        include_lexical: bool = False,
+        limit: Annotated[int, Field(ge=1, le=200)] = 100,
+    ) -> dict[str, Any]:
+        """Traverse an explainable Element dependency graph with evidence and confidence on every edge."""
+        return graph.get_element_dependencies(
+            identifier,
+            direction=direction,
+            depth=depth,
+            include_lexical=include_lexical,
+            limit=limit,
+        )
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def get_project_dependency_graph(
+        subsystem: Annotated[str | None, Field(max_length=1024)] = None,
+        include_lexical: bool = False,
+        offset: Annotated[int, Field(ge=0)] = 0,
+        limit: Annotated[int, Field(ge=1, le=200)] = 100,
+        edge_limit: Annotated[int, Field(ge=1, le=500)] = 300,
+    ) -> dict[str, Any]:
+        """List the bounded element-to-element project graph without claiming compiler-level resolution."""
+        return graph.get_project_dependency_graph(
+            subsystem=subsystem,
+            include_lexical=include_lexical,
+            offset=offset,
+            limit=limit,
+            edge_limit=edge_limit,
+        )
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def analyze_change_impact(
+        element: Annotated[str | None, Field(max_length=1024)] = None,
+        relative_paths: Annotated[list[str] | None, Field(max_length=200)] = None,
+        depth: Annotated[int, Field(ge=1, le=5)] = 3,
+        include_lexical: bool = True,
+        limit: Annotated[int, Field(ge=1, le=200)] = 100,
+    ) -> dict[str, Any]:
+        """Find bounded reverse dependencies for an element or project files before editing them."""
+        return graph.analyze_change_impact(
+            element=element,
+            relative_paths=relative_paths,
+            depth=depth,
+            include_lexical=include_lexical,
+            limit=limit,
+        )
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def get_changed_elements(
+        changed_paths: Annotated[list[str] | None, Field(max_length=200)] = None,
+    ) -> dict[str, Any]:
+        """Map local Git or explicitly supplied changed paths to Element entities without modifying Git state."""
+        return graph.get_changed_elements(changed_paths)
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def validate_element_structure(
+        identifier: Annotated[str | None, Field(max_length=1024)] = None,
+        limit: Annotated[int, Field(ge=1, le=100)] = 100,
+    ) -> dict[str, Any]:
+        """Report structural metadata, handler, import, ambiguity, and cycle issues without compiling the project."""
+        return graph.validate_element_structure(identifier, limit=limit)
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def find_unused_project_elements(
+        subsystem: Annotated[str | None, Field(max_length=1024)] = None,
+        include_public: bool = False,
+        offset: Annotated[int, Field(ge=0)] = 0,
+        limit: Annotated[int, Field(ge=1, le=100)] = 50,
+    ) -> dict[str, Any]:
+        """Return low-confidence unused candidates for review; the result never proves safe deletion."""
+        return graph.find_unused_project_elements(
+            subsystem=subsystem,
+            include_public=include_public,
+            offset=offset,
+            limit=limit,
+        )
 
     @server.tool(annotations=READ_ONLY, structured_output=True)
     def get_language_server_status(start: bool = False) -> dict[str, Any]:
