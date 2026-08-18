@@ -69,6 +69,19 @@
               >Настроить</button>
             </dd>
           </div>
+          <div class="metadata-row">
+            <dt>Сервер Element</dt>
+            <dd class="source-value">
+              <span id="runtime-summary">—</span>
+              <button
+                id="runtime-toggle"
+                class="text-action"
+                type="button"
+                aria-expanded="false"
+                aria-controls="runtime-settings"
+              >Настроить</button>
+            </dd>
+          </div>
         </dl>
 
         <form id="documentation-settings" class="documentation-settings" hidden novalidate>
@@ -177,6 +190,94 @@
               Проверить и сохранить
             </button>
           </fieldset>
+        </form>
+
+        <form id="runtime-settings" class="runtime-settings" hidden novalidate>
+          <div class="settings-heading">
+            <div>
+              <h2>Диагностика сервера Element</h2>
+              <p>Локальные состояние, место на диске и журнальные файлы экземпляра.</p>
+            </div>
+          </div>
+
+          <label for="runtime-instance-root">Каталог экземпляра сервера</label>
+          <input
+            id="runtime-instance-root"
+            name="runtime-instance-root"
+            type="text"
+            maxlength="4096"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="C:\ProgramData\1C\1CE\instances\1c-enterprise-element-server-with-ide"
+            aria-describedby="runtime-root-help runtime-feedback runtime-error"
+          >
+          <p id="runtime-root-help" class="settings-help">
+            Это рабочий каталог установленного экземпляра с папками <code>config</code> и <code>logs</code>,
+            а не каталог дистрибутива.
+          </p>
+
+          <fieldset class="nested-settings">
+            <legend>Журнал событий приложения</legend>
+            <label class="switch-label inline-switch" for="runtime-manager-enabled">
+              <input id="runtime-manager-enabled" name="runtime-manager-enabled" type="checkbox" role="switch">
+              <span>Подключить Application Manager</span>
+            </label>
+            <p class="settings-help">
+              Нужна отдельная внутренняя учётная запись экземпляра. Client ID и Client Secret Панели управления
+              здесь не подходят.
+            </p>
+
+            <div id="runtime-manager-fields" hidden>
+              <label for="runtime-manager-server">HTTP-адрес Application Manager</label>
+              <input
+                id="runtime-manager-server"
+                name="runtime-manager-server"
+                type="url"
+                maxlength="2048"
+                autocomplete="url"
+                spellcheck="false"
+                placeholder="https://element.example"
+                aria-describedby="runtime-manager-help runtime-error"
+              >
+              <p id="runtime-manager-help" class="settings-help">
+                Укажите адрес сервера до <code>/manager/api/v1</code> или <code>/manager/api/v2</code>.
+              </p>
+
+              <label for="runtime-manager-username">Имя пользователя</label>
+              <input
+                id="runtime-manager-username"
+                name="runtime-manager-username"
+                type="text"
+                maxlength="2048"
+                autocomplete="username"
+                spellcheck="false"
+                aria-describedby="runtime-error"
+              >
+
+              <label for="runtime-manager-password">Пароль</label>
+              <input
+                id="runtime-manager-password"
+                name="runtime-manager-password"
+                type="password"
+                maxlength="8192"
+                autocomplete="new-password"
+                spellcheck="false"
+                aria-describedby="runtime-password-help runtime-error"
+              >
+              <p id="runtime-password-help" class="settings-help">
+                На Windows пароль защищается средствами ОС. Он не возвращается в браузер или агенту.
+              </p>
+
+              <label class="check-label" for="runtime-manager-verify-tls">
+                <input id="runtime-manager-verify-tls" name="runtime-manager-verify-tls" type="checkbox" checked>
+                <span>Проверять TLS-сертификат</span>
+              </label>
+            </div>
+          </fieldset>
+
+          <p id="runtime-feedback" class="source-feedback" role="status" aria-live="polite" hidden></p>
+          <p id="runtime-error" class="source-error" role="alert" hidden></p>
+          <button id="runtime-save" class="settings-action" type="submit">Сохранить настройки</button>
         </form>
 
         <div class="update-area">

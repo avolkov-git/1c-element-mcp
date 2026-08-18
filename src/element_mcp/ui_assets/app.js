@@ -31,6 +31,20 @@ const consoleSecretHelp = document.querySelector("#console-secret-help");
 const consoleFeedback = document.querySelector("#console-feedback");
 const consoleError = document.querySelector("#console-error");
 const consoleSave = document.querySelector("#console-save");
+const runtimeSummary = document.querySelector("#runtime-summary");
+const runtimeToggle = document.querySelector("#runtime-toggle");
+const runtimeSettings = document.querySelector("#runtime-settings");
+const runtimeInstanceRoot = document.querySelector("#runtime-instance-root");
+const runtimeManagerEnabled = document.querySelector("#runtime-manager-enabled");
+const runtimeManagerFields = document.querySelector("#runtime-manager-fields");
+const runtimeManagerServer = document.querySelector("#runtime-manager-server");
+const runtimeManagerUsername = document.querySelector("#runtime-manager-username");
+const runtimeManagerPassword = document.querySelector("#runtime-manager-password");
+const runtimeManagerVerifyTls = document.querySelector("#runtime-manager-verify-tls");
+const runtimePasswordHelp = document.querySelector("#runtime-password-help");
+const runtimeFeedback = document.querySelector("#runtime-feedback");
+const runtimeError = document.querySelector("#runtime-error");
+const runtimeSave = document.querySelector("#runtime-save");
 
 let latestStatus = null;
 let initialVersion = null;
@@ -40,6 +54,8 @@ let documentationDirty = false;
 let documentationBusy = false;
 let consoleConfiguration = null;
 let consoleBusy = false;
+let runtimeConfiguration = null;
+let runtimeBusy = false;
 
 function sleep(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
@@ -293,6 +309,123 @@ async function disableConsoleConnection() {
     showConsoleError(error.message);
   } finally {
     setConsoleBusy(false);
+  }
+}
+
+function showRuntimeError(value, invalidField = null) {
+  runtimeError.textContent = value;
+  runtimeError.hidden = !value;
+  for (const input of [
+    runtimeInstanceRoot,
+    runtimeManagerServer,
+    runtimeManagerUsername,
+    runtimeManagerPassword,
+  ]) {
+    input.setAttribute("aria-invalid", input === invalidField ? "true" : "false");
+  }
+}
+
+function showRuntimeFeedback(value, state = "") {
+  runtimeFeedback.textContent = value;
+  runtimeFeedback.hidden = !value;
+  runtimeFeedback.dataset.state = state;
+}
+
+function setRuntimeBusy(value) {
+  runtimeBusy = value;
+  for (const input of [
+    runtimeInstanceRoot,
+    runtimeManagerEnabled,
+    runtimeManagerServer,
+    runtimeManagerUsername,
+    runtimeManagerPassword,
+    runtimeManagerVerifyTls,
+    runtimeSave,
+  ]) {
+    input.disabled = value;
+  }
+  runtimeSave.textContent = value ? "Сохраняем…" : "Сохранить настройки";
+}
+
+function renderRuntimeConfiguration(payload) {
+  runtimeConfiguration = payload;
+  const manager = payload.application_manager || {};
+  runtimeSummary.textContent =
+    payload.status === "configured" ? payload.instance_root : "Не настроен";
+  runtimeSummary.title = payload.instance_root || "";
+  runtimeInstanceRoot.value = payload.instance_root || "";
+  runtimeManagerEnabled.checked = Boolean(manager.enabled);
+  runtimeManagerFields.hidden = !manager.enabled;
+  runtimeManagerServer.value = manager.server || "";
+  runtimeManagerUsername.value = manager.username || "";
+  runtimeManagerPassword.value = "";
+  runtimeManagerPassword.placeholder = manager.password_present
+    ? "Сохранён — оставьте пустым"
+    : "";
+  runtimePasswordHelp.textContent = manager.password_present
+    ? "Оставьте поле пустым, чтобы использовать сохранённый пароль. Он не возвращается браузеру или агенту."
+    : "На Windows пароль защищается средствами ОС. Он не возвращается браузеру или агенту.";
+  runtimeManagerVerifyTls.checked = manager.verify_tls !== false;
+  runtimeToggle.textContent = runtimeSettings.hidden ? "Настроить" : "Скрыть";
+}
+
+async function loadRuntimeConfiguration() {
+  try {
+    renderRuntimeConfiguration(await api("/api/runtime/configuration"));
+  } catch (error) {
+    runtimeSummary.textContent = "Недоступен";
+    showRuntimeError(error.message);
+  }
+}
+
+async function saveRuntimeConfiguration() {
+  if (runtimeBusy) return;
+  showRuntimeError("");
+  const managerEnabled = runtimeManagerEnabled.checked;
+  let invalidField = null;
+  if (!runtimeInstanceRoot.value.trim()) invalidField = runtimeInstanceRoot;
+  else if (managerEnabled && !runtimeManagerServer.value.trim()) invalidField = runtimeManagerServer;
+  else if (managerEnabled && !runtimeManagerUsername.value.trim()) invalidField = runtimeManagerUsername;
+  else if (
+    managerEnabled &&
+    !runtimeManagerPassword.value &&
+    !runtimeConfiguration?.application_manager?.password_present
+  ) {
+    invalidField = runtimeManagerPassword;
+  }
+  if (invalidField) {
+    showRuntimeError("Заполните обязательные поля настройки.", invalidField);
+    invalidField.focus();
+    return;
+  }
+  showRuntimeFeedback("Проверяем каталог экземпляра и сохраняем настройки…", "loading");
+  setRuntimeBusy(true);
+  try {
+    const payload = await api("/api/runtime/configuration", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        instance_root: runtimeInstanceRoot.value.trim(),
+        application_manager_enabled: managerEnabled,
+        server: runtimeManagerServer.value.trim() || null,
+        username: runtimeManagerUsername.value.trim() || null,
+        password: runtimeManagerPassword.value || null,
+        api_version: "auto",
+        verify_tls: runtimeManagerVerifyTls.checked,
+      }),
+    });
+    renderRuntimeConfiguration(payload);
+    showRuntimeFeedback(
+      managerEnabled
+        ? "Диагностика и доступ к журналу событий настроены."
+        : "Локальная диагностика сервера настроена.",
+      "success",
+    );
+  } catch (error) {
+    showRuntimeFeedback("");
+    showRuntimeError(error.message);
+  } finally {
+    setRuntimeBusy(false);
   }
 }
 
@@ -576,8 +709,38 @@ consoleSettings.addEventListener("submit", (event) => {
   saveConsoleConnection();
 });
 
+runtimeToggle.addEventListener("click", () => {
+  const open = runtimeSettings.hidden;
+  runtimeSettings.hidden = !open;
+  runtimeToggle.setAttribute("aria-expanded", String(open));
+  runtimeToggle.textContent = open ? "Скрыть" : "Настроить";
+  if (open) {
+    showRuntimeFeedback("");
+    showRuntimeError("");
+    runtimeInstanceRoot.focus();
+  }
+});
+
+runtimeManagerEnabled.addEventListener("change", () => {
+  runtimeManagerFields.hidden = !runtimeManagerEnabled.checked;
+  showRuntimeError("");
+  showRuntimeFeedback(
+    runtimeManagerEnabled.checked
+      ? "Заполните внутреннее подключение Application Manager и сохраните настройки."
+      : "Журнал событий будет отключён после сохранения; локальные логи останутся доступны.",
+    "pending",
+  );
+  if (runtimeManagerEnabled.checked) runtimeManagerServer.focus();
+});
+
+runtimeSettings.addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveRuntimeConfiguration();
+});
+
 loadDocumentationStatus();
 loadConsoleConfiguration();
+loadRuntimeConfiguration();
 
 api("/api/status")
   .then((payload) => {

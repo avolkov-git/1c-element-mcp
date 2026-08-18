@@ -2,6 +2,22 @@
 
 Проект следует [Semantic Versioning](https://semver.org/).
 
+## [0.19.0] - 2026-08-18
+
+- Добавлены девять read-only tools для runtime health, процесса, диска, server logs, Application Event Log и
+  точной корреляции операций.
+- Instance root проверяется по штатным `config/server.yml`/`config/logging.yml`; файловые операции принимают
+  только allowlisted `log_id`, не следуют по symlink и ограничивают файлы, байты, строки и совпадения.
+- Подтверждены внутренние маршруты Application Manager Element 9.2.4-6: V1 GET, V2 POST, anchor, обязательный
+  диапазон, фильтры и отдельный V1 GET события. Auto-режим безопасно деградирует с V2 на V1.
+- В локальный UI добавлена необязательная настройка instance root и внутреннего Application Manager. Его Basic
+  credentials отделены от Console Client ID/Secret, защищаются DPAPI/ACL на Windows и не возвращаются агенту.
+- Добавлена единая redaction policy для credentials, email, user ID, свойств событий и ограниченных stack traces.
+- `trace_operation` соединяет только точные task/application/trace/request/operation ID, показывает происхождение
+  каждой части и честно возвращает gaps при недоступном источнике.
+- Тесты покрывают ротацию, binary/invalid UTF-8, path traversal, symlink, временные зоны, лимит диапазона,
+  V2→V1 fallback, 401, anchor и отсутствие секретов в MCP/UI-ответах.
+
 ## [0.18.0] - 2026-08-18
 
 - Добавлены read-only `get_hover` и `get_signature_help` поверх штатного Language Server Element.

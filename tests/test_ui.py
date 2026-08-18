@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -42,11 +43,12 @@ def test_ui_reports_running_server_and_protects_mutations(tmp_path: Path) -> Non
         assert page.status_code == 200
         assert "MCP работает" in page.text
         assert "Каталог нормализованной документации" in page.text
+        assert "Диагностика сервера Element" in page.text
         assert "frame-ancestors 'none'" in page.headers["content-security-policy"]
 
         status = client.get("/api/status")
         assert status.status_code == 200
-        assert status.json()["server"] == {"state": "running", "version": "0.18.0"}
+        assert status.json()["server"] == {"state": "running", "version": "0.19.0"}
 
         assert client.post("/api/updates/check").status_code == 403
         token = re.search(r'name="element-mcp-token" content="([^"]+)"', page.text).group(1)  # type: ignore[union-attr]
@@ -160,6 +162,54 @@ def test_ui_rejects_unexpected_host_header(tmp_path: Path) -> None:
     server = create_server(ServerSettings(data_path=tmp_path / "data", host="127.0.0.1"))
     with TestClient(server.streamable_http_app(), base_url="http://unexpected.example") as client:
         assert client.get("/").status_code == 403
+
+
+def test_ui_configures_runtime_without_returning_application_manager_password(tmp_path: Path) -> None:
+    instance_root = tmp_path / "instance"
+    (instance_root / "config").mkdir(parents=True)
+    (instance_root / "logs").mkdir()
+    (instance_root / "config" / "server.yml").write_text("server: {}\n", encoding="utf-8")
+    (instance_root / "config" / "logging.yml").write_text("logging: {}\n", encoding="utf-8")
+    runtime_config = tmp_path / "runtime.json"
+    server = create_server(
+        ServerSettings(
+            data_path=tmp_path / "data",
+            config_path=tmp_path / "config.json",
+            runtime_config_path=runtime_config,
+            transport="streamable-http",
+            host="127.0.0.1",
+        )
+    )
+
+    with TestClient(server.streamable_http_app(), base_url="http://127.0.0.1") as client:
+        page = client.get("/")
+        token = re.search(r'name="element-mcp-token" content="([^"]+)"', page.text).group(1)  # type: ignore[union-attr]
+        missing = client.get("/api/runtime/configuration")
+        assert missing.status_code == 200
+        assert missing.json()["status"] == "missing"
+
+        payload = {
+            "instance_root": str(instance_root),
+            "application_manager_enabled": True,
+            "server": "https://element.example/manager/api/v2",
+            "username": "manager-user",
+            "password": "manager-password",
+            "api_version": "auto",
+            "verify_tls": True,
+        }
+        assert client.post("/api/runtime/configuration", json=payload).status_code == 403
+        saved = client.post(
+            "/api/runtime/configuration",
+            json=payload,
+            headers={"X-Element-MCP-Token": token},
+        )
+
+        assert saved.status_code == 200
+        assert saved.json()["instance_root"] == str(instance_root.resolve())
+        assert saved.json()["application_manager"]["server"] == "https://element.example"
+        assert saved.json()["application_manager"]["password_present"] is True
+        assert "manager-password" not in saved.text
+        assert "manager-password" in runtime_config.read_text(encoding="utf-8") or os.name == "nt"
 
 
 def test_ui_accepts_verified_ide_handoff_without_returning_secret(

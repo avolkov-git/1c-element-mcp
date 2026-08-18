@@ -186,6 +186,7 @@ class ServerSettings:
     element_bundle_path: Path | None = None
     java_path: Path | None = None
     console_config_path: Path | None = None
+    runtime_config_path: Path | None = None
     ide_settings_path: Path | None = None
     config_path: Path | None = None
     data_path: Path | None = None
@@ -222,6 +223,12 @@ class ServerSettings:
         if self.console_config_path:
             return self.console_config_path.expanduser().resolve()
         return self.resolved_config_path.parent / "console.json"
+
+    @property
+    def resolved_runtime_config_path(self) -> Path:
+        if self.runtime_config_path:
+            return self.runtime_config_path.expanduser().resolve()
+        return self.resolved_config_path.parent / "runtime.json"
 
     @property
     def resolved_ide_settings_path(self) -> Path | None:

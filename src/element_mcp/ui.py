@@ -15,6 +15,7 @@ from element_mcp.console import ConsoleConfigurationError, ConsoleRequestError, 
 from element_mcp.corpus import CorpusError
 from element_mcp.documentation import DocumentationService
 from element_mcp.project import ProjectError, ProjectService
+from element_mcp.runtime import RuntimeConfigurationError, RuntimeDiagnosticsService
 from element_mcp.updates import UpdateError, UpdateService
 
 
@@ -29,6 +30,7 @@ def register_ui(
     documentation: DocumentationService,
     console: ConsoleService,
     project: ProjectService,
+    runtime: RuntimeDiagnosticsService,
 ) -> None:
     allowed_hosts = {"127.0.0.1", "localhost", "::1", settings.host.lower()}
 
@@ -222,6 +224,53 @@ def register_ui(
                 {"status": "rejected", "http_status": error.status_code, "message": str(error)},
                 status_code=status_code,
             )
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+    @server.custom_route("/api/runtime/configuration", methods=["GET", "POST"], include_in_schema=False)
+    async def configure_runtime(request: Request) -> Response:
+        if request.method == "GET":
+            if not host_allowed(request):
+                return Response(status_code=403)
+            try:
+                result = await anyio.to_thread.run_sync(runtime.configuration_info)
+            except RuntimeConfigurationError as error:
+                return JSONResponse({"status": "invalid", "message": str(error)}, status_code=500)
+            return JSONResponse(result, headers={"Cache-Control": "no-store"})
+        if not mutation_allowed(request):
+            return JSONResponse({"message": "Недопустимый локальный запрос"}, status_code=403)
+        try:
+            content_length = int(request.headers.get("content-length", "0") or 0)
+        except ValueError:
+            return JSONResponse({"message": "Некорректная длина запроса"}, status_code=400)
+        if content_length <= 0 or content_length > 24 * 1024:
+            return JSONResponse({"message": "Некорректный размер настроек диагностики"}, status_code=413)
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"message": "Настройки диагностики должны быть JSON-объектом"}, status_code=400)
+        if not isinstance(payload, dict) or not isinstance(payload.get("application_manager_enabled"), bool):
+            return JSONResponse({"message": "Некорректные настройки диагностики"}, status_code=400)
+        string_fields = ("instance_root", "server", "username", "password", "api_version")
+        if any(payload.get(key) is not None and not isinstance(payload.get(key), str) for key in string_fields):
+            return JSONResponse({"message": "Текстовые поля диагностики должны быть строками"}, status_code=400)
+        if "verify_tls" in payload and not isinstance(payload["verify_tls"], bool):
+            return JSONResponse({"message": "Поле verify_tls должно быть логическим"}, status_code=400)
+        if max((len(payload.get(key) or "") for key in string_fields), default=0) > 8192:
+            return JSONResponse({"message": "Одно из полей настроек слишком длинное"}, status_code=400)
+        try:
+            operation = partial(
+                runtime.configure,
+                instance_root=payload.get("instance_root", ""),
+                application_manager_enabled=payload["application_manager_enabled"],
+                server=payload.get("server"),
+                username=payload.get("username"),
+                password=payload.get("password"),
+                api_version=payload.get("api_version", "auto"),
+                verify_tls=payload.get("verify_tls", True),
+            )
+            result = await anyio.to_thread.run_sync(operation)
+        except RuntimeConfigurationError as error:
+            return JSONResponse({"status": "invalid", "message": str(error)}, status_code=400)
         return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
     @server.custom_route("/api/integrations/element-console", methods=["POST", "DELETE"], include_in_schema=False)

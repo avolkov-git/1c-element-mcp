@@ -17,12 +17,17 @@ def test_stdio_server_exposes_read_only_tools(
     async def exercise_server() -> None:
         environment = dict(os.environ)
         for key in list(environment):
-            if key.startswith("ELEMENT_CONSOLE_") or key == "ELEMENT_IDE_SETTINGS_PATH":
+            if (
+                key.startswith("ELEMENT_CONSOLE_")
+                or key.startswith("ELEMENT_APPLICATION_MANAGER_")
+                or key in {"ELEMENT_IDE_SETTINGS_PATH", "ELEMENT_INSTANCE_ROOT"}
+            ):
                 environment.pop(key)
         environment["ELEMENT_DOCS_PATH"] = str(corpus_path)
         environment["ELEMENT_PROJECT_PATH"] = str(element_project_path)
         environment["ELEMENT_MCP_CONFIG_PATH"] = str(tmp_path / "config.json")
         environment["ELEMENT_MCP_DATA_PATH"] = str(tmp_path / "data")
+        environment["ELEMENT_RUNTIME_CONFIG_PATH"] = str(tmp_path / "runtime.json")
         parameters = StdioServerParameters(
             command=sys.executable,
             args=["-m", "element_mcp", "--transport", "stdio"],
@@ -34,7 +39,7 @@ def test_stdio_server_exposes_read_only_tools(
         ):
             initialized = await session.initialize()
             assert initialized.serverInfo.name == "1C Element"
-            assert initialized.serverInfo.version == "0.18.0"
+            assert initialized.serverInfo.version == "0.19.0"
             assert initialized.instructions is not None
             assert "first call\nget_documentation_status" in initialized.instructions
             assert "Never call start_documentation_build without that consent" in initialized.instructions
@@ -53,6 +58,8 @@ def test_stdio_server_exposes_read_only_tools(
             assert "Use get_hover for the type and documentation" in initialized.instructions
             assert "Use get_signature_help only at a call" in initialized.instructions
             assert "An empty LSP response means" in initialized.instructions
+            assert "For runtime incidents, first call get_runtime_health" in initialized.instructions
+            assert "never correlate entries" in initialized.instructions
             assert "call get_current_application" in initialized.instructions
             assert "Do not infer\na current application in ordinary VS Code" in initialized.instructions
             assert "use get_element_dependencies or get_project_dependency_graph" in initialized.instructions
@@ -80,6 +87,7 @@ def test_stdio_server_exposes_read_only_tools(
                 "get_console_status",
                 "get_console_task",
                 "get_application",
+                "get_application_event",
                 "get_application_project",
                 "get_application_status",
                 "get_application_technology",
@@ -91,6 +99,9 @@ def test_stdio_server_exposes_read_only_tools(
                 "get_definition",
                 "get_hover",
                 "get_language_server_status",
+                "get_runtime_health",
+                "get_server_disk_usage",
+                "get_server_process_status",
                 "get_project_overview",
                 "get_project_status",
                 "get_project_diagnostics",
@@ -103,6 +114,7 @@ def test_stdio_server_exposes_read_only_tools(
                 "find_unused_project_elements",
                 "get_changed_elements",
                 "list_project_elements",
+                "list_server_logs",
                 "list_console_spaces",
                 "list_console_tasks",
                 "list_application_endpoints",
@@ -112,10 +124,14 @@ def test_stdio_server_exposes_read_only_tools(
                 "match_console_project",
                 "get_project_assembly",
                 "read_project_file",
+                "read_server_log",
+                "search_application_events",
                 "search_docs",
                 "search_project_code",
+                "search_server_logs",
                 "start_documentation_build",
                 "validate_element_structure",
+                "trace_operation",
             }
             read_only = {
                 "analyze_change_impact",
@@ -135,6 +151,7 @@ def test_stdio_server_exposes_read_only_tools(
                 "get_console_status",
                 "get_console_task",
                 "get_application",
+                "get_application_event",
                 "get_application_project",
                 "get_application_status",
                 "get_application_technology",
@@ -146,6 +163,9 @@ def test_stdio_server_exposes_read_only_tools(
                 "get_definition",
                 "get_hover",
                 "get_language_server_status",
+                "get_runtime_health",
+                "get_server_disk_usage",
+                "get_server_process_status",
                 "get_project_overview",
                 "get_project_status",
                 "get_project_diagnostics",
@@ -156,6 +176,7 @@ def test_stdio_server_exposes_read_only_tools(
                 "lookup_symbol",
                 "find_references",
                 "list_project_elements",
+                "list_server_logs",
                 "list_console_spaces",
                 "list_console_tasks",
                 "list_application_endpoints",
@@ -165,8 +186,12 @@ def test_stdio_server_exposes_read_only_tools(
                 "match_console_project",
                 "get_project_assembly",
                 "read_project_file",
+                "read_server_log",
+                "search_application_events",
                 "search_docs",
                 "search_project_code",
+                "search_server_logs",
+                "trace_operation",
                 "validate_element_structure",
             }
             for tool in tools.tools:
@@ -192,6 +217,10 @@ def test_stdio_server_exposes_read_only_tools(
             assert "Element LSP" in (descriptions["get_references"] or "")
             assert "type and documentation" in (descriptions["get_hover"] or "")
             assert "active parameter" in (descriptions["get_signature_help"] or "")
+            assert "runtime incidents" in (descriptions["get_runtime_health"] or "")
+            assert "arbitrary paths are rejected" in (descriptions["read_server_log"] or "")
+            assert "mandatory bounded time range" in (descriptions["search_application_events"] or "")
+            assert "exact IDs" in (descriptions["trace_operation"] or "")
             assert "published by Element LSP" in (descriptions["get_project_diagnostics"] or "")
             assert "structured datasets" in (descriptions["list_reference_datasets"] or "")
             assert "resolved schemas" in (descriptions["get_api_operation"] or "")
@@ -296,6 +325,11 @@ def test_stdio_server_exposes_read_only_tools(
             assert application.structuredContent is not None
             assert application.structuredContent["status"] == "not_available"
 
+            runtime = await session.call_tool("get_runtime_health", {})
+            assert runtime.isError is False
+            assert runtime.structuredContent is not None
+            assert runtime.structuredContent["status"] == "missing"
+
     asyncio.run(exercise_server())
 
 
@@ -303,12 +337,17 @@ def test_stdio_server_reports_missing_corpus(tmp_path: Path) -> None:
     async def exercise_server() -> None:
         environment = dict(os.environ)
         for key in list(environment):
-            if key.startswith("ELEMENT_CONSOLE_") or key == "ELEMENT_IDE_SETTINGS_PATH":
+            if (
+                key.startswith("ELEMENT_CONSOLE_")
+                or key.startswith("ELEMENT_APPLICATION_MANAGER_")
+                or key in {"ELEMENT_IDE_SETTINGS_PATH", "ELEMENT_INSTANCE_ROOT"}
+            ):
                 environment.pop(key)
         environment.pop("ELEMENT_DOCS_PATH", None)
         environment.pop("ELEMENT_PROJECT_PATH", None)
         environment["ELEMENT_MCP_CONFIG_PATH"] = str(tmp_path / "config.json")
         environment["ELEMENT_MCP_DATA_PATH"] = str(tmp_path / "data")
+        environment["ELEMENT_RUNTIME_CONFIG_PATH"] = str(tmp_path / "runtime.json")
         parameters = StdioServerParameters(
             command=sys.executable,
             args=["-m", "element_mcp", "--transport", "stdio"],

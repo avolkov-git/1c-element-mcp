@@ -14,6 +14,7 @@ from element_mcp.graph import ProjectGraphService
 from element_mcp.installation import discover_element_installations as find_element_installations
 from element_mcp.language_server import LanguageServerService
 from element_mcp.project import ProjectService
+from element_mcp.runtime import RuntimeDiagnosticsService
 from element_mcp.semantic import SemanticService
 from element_mcp.ui import register_ui
 from element_mcp.updates import UpdateService
@@ -117,6 +118,17 @@ For questions about the application currently attached to Element IDE, call get_
 has no application_id argument and works only with the temporary Element plugin handoff containing
 1C.applicationId. Treat it as the exact published application instance selected for the current IDE. Do not infer
 a current application in ordinary VS Code from the project name, source tree, or standalone Console credentials.
+
+For runtime incidents, first call get_runtime_health. Runtime files are available only from a validated local
+Element instance root; never ask for or pass an arbitrary filesystem path to a log tool. Use
+get_server_process_status and get_server_disk_usage for host state, list_server_logs before read_server_log, and
+search_server_logs for bounded exact text search. Server logs and the structured application event log are
+different sources. For application events, always supply an explicit timezone-aware start_instant and
+final_instant, keep the range and size as small as practical, and use the returned anchor for pagination. Omit
+application_id only in an active Element IDE session. Application Manager credentials must be configured in the
+local MCP UI or process environment and must never appear in chat or tool arguments. Use trace_operation only for
+exact task/application/trace/request/operation identifiers; preserve source and gaps and never correlate entries
+merely because their text looks similar. All diagnostic output is bounded and redacted.
 """.strip()
 
 
@@ -127,6 +139,7 @@ def create_server(settings: ServerSettings) -> FastMCP:
     semantic = SemanticService(project, documentation)
     language_server = LanguageServerService(settings, project, semantic)
     console = ConsoleService(settings)
+    runtime = RuntimeDiagnosticsService(settings, console)
     updates = UpdateService(settings)
     server = FastMCP(
         name="1C Element",
@@ -139,7 +152,7 @@ def create_server(settings: ServerSettings) -> FastMCP:
     # FastMCP 1.x does not expose the low-level server version in its constructor.
     # Without this assignment clients would see the SDK version instead of our SemVer.
     server._mcp_server.version = __version__
-    register_ui(server, settings, updates, documentation, console, project)
+    register_ui(server, settings, updates, documentation, console, project, runtime)
 
     @server.tool(annotations=READ_ONLY, structured_output=True)
     def get_corpus_info() -> dict[str, Any]:
@@ -385,6 +398,103 @@ def create_server(settings: ServerSettings) -> FastMCP:
         if console_result.get("status") != "ready":
             return console_result
         return project.match_console_project(console_result["project"], workspace_path)
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def get_runtime_health() -> dict[str, Any]:
+        """Call first for runtime incidents; report local instance, process, disk, logs, and event-log readiness."""
+        return {"server_version": __version__, **runtime.health()}
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def get_server_process_status() -> dict[str, Any]:
+        """Read the daemon PID status from the validated local Element instance without changing the process."""
+        return {"server_version": __version__, **runtime.process_status()}
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def get_server_disk_usage() -> dict[str, Any]:
+        """Read filesystem capacity and bounded logs/dumps/work sizes for the validated Element instance."""
+        return {"server_version": __version__, **runtime.disk_usage()}
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def list_server_logs() -> dict[str, Any]:
+        """List bounded, allowlisted log files directly inside the validated Element instance log root."""
+        return runtime.list_logs()
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def read_server_log(
+        log_id: Annotated[str, Field(min_length=1, max_length=255)],
+        tail_lines: Annotated[int, Field(ge=1, le=1000)] = 200,
+    ) -> dict[str, Any]:
+        """Read a redacted tail from a log_id returned by list_server_logs; arbitrary paths are rejected."""
+        return runtime.read_log(log_id, tail_lines=tail_lines)
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def search_server_logs(
+        query: Annotated[str, Field(min_length=1, max_length=300)],
+        log_ids: Annotated[list[str] | None, Field(max_length=100)] = None,
+        max_matches: Annotated[int, Field(ge=1, le=200)] = 100,
+    ) -> dict[str, Any]:
+        """Search recent bounded windows of allowlisted server logs and redact credentials and personal data."""
+        return runtime.search_logs(query, log_ids=log_ids, max_matches=max_matches)
+
+    @server.tool(annotations=EXTERNAL_READ_ONLY, structured_output=True)
+    def search_application_events(
+        start_instant: Annotated[str, Field(min_length=1, max_length=64)],
+        final_instant: Annotated[str, Field(min_length=1, max_length=64)],
+        application_id: Annotated[str | None, Field(max_length=64)] = None,
+        size: Annotated[int, Field(ge=1, le=100)] = 50,
+        anchor_event_id: Annotated[str | None, Field(max_length=64)] = None,
+        search_substring: Annotated[str | None, Field(max_length=300)] = None,
+        operation_id: Annotated[str | None, Field(max_length=300)] = None,
+        importance: Annotated[list[str] | None, Field(max_length=4)] = None,
+        kind: Annotated[list[str] | None, Field(max_length=5)] = None,
+        names: Annotated[list[str] | None, Field(max_length=50)] = None,
+    ) -> dict[str, Any]:
+        """Search the structured application event log in a mandatory bounded time range with anchor pagination."""
+        return runtime.search_application_events(
+            application_id=application_id,
+            start_instant=start_instant,
+            final_instant=final_instant,
+            size=size,
+            anchor_event_id=anchor_event_id,
+            search_substring=search_substring,
+            operation_id=operation_id,
+            importance=importance,
+            kind=kind,
+            names=names,
+        )
+
+    @server.tool(annotations=EXTERNAL_READ_ONLY, structured_output=True)
+    def get_application_event(
+        event_id: Annotated[str, Field(min_length=1, max_length=64)],
+        application_id: Annotated[str | None, Field(max_length=64)] = None,
+    ) -> dict[str, Any]:
+        """Read one structured application event by exact UUID through the configured Application Manager."""
+        return runtime.get_application_event(application_id=application_id, event_id=event_id)
+
+    @server.tool(annotations=EXTERNAL_READ_ONLY, structured_output=True)
+    def trace_operation(
+        task_id: Annotated[str | None, Field(max_length=64)] = None,
+        task_type: Literal["application", "deployment_instance", "group"] = "application",
+        application_id: Annotated[str | None, Field(max_length=64)] = None,
+        trace_id: Annotated[str | None, Field(max_length=300)] = None,
+        request_id: Annotated[str | None, Field(max_length=300)] = None,
+        operation_id: Annotated[str | None, Field(max_length=300)] = None,
+        start_instant: Annotated[str | None, Field(max_length=64)] = None,
+        final_instant: Annotated[str | None, Field(max_length=64)] = None,
+        max_matches: Annotated[int, Field(ge=1, le=100)] = 100,
+    ) -> dict[str, Any]:
+        """Correlate exact IDs across Console tasks, server logs, and application events with source-labelled gaps."""
+        return runtime.trace_operation(
+            task_id=task_id,
+            task_type=task_type,
+            application_id=application_id,
+            trace_id=trace_id,
+            request_id=request_id,
+            operation_id=operation_id,
+            start_instant=start_instant,
+            final_instant=final_instant,
+            max_matches=max_matches,
+        )
 
     @server.tool(annotations=LOCAL_IDEMPOTENT_WRITE, structured_output=True)
     def connect_project(
