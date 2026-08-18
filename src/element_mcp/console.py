@@ -5,9 +5,11 @@ import csv
 import hashlib
 import json
 import os
+import re
 import ssl
 import subprocess
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -22,6 +24,11 @@ from element_mcp.config import ConfigurationStore, ServerSettings, discover_proj
 
 MAX_SETTINGS_BYTES = 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS = 15.0
+CONSOLE_API_VERSION = "v2"
+CONSOLE_CONTRACT_VERSION = "9.2.4-6"
+MAX_EXTERNAL_TEXT = 2000
+MAX_LIST_LIMIT = 100
+RETRYABLE_GET_STATUSES = {429, 502, 503, 504}
 
 
 class ConsoleConfigurationError(ValueError):
@@ -169,14 +176,31 @@ class ConsoleSessionStore:
 
 
 class ConsoleHttpClient:
-    def __init__(self, *, requester: Requester | None = None, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> None:
+    def __init__(
+        self,
+        *,
+        requester: Requester | None = None,
+        timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        retry_delays: tuple[float, ...] = (0.1, 0.3),
+        sleeper: Callable[[float], None] = time.sleep,
+    ) -> None:
         self.requester = requester or _urlopen_json
         self.timeout = timeout
+        self.retry_delays = retry_delays
+        self.sleeper = sleeper
         self._tokens: dict[str, str] = {}
         self._lock = threading.Lock()
 
     def get(self, connection: ConsoleConnection, path: str) -> Any:
-        return self._authorized_request(connection, "GET", path)
+        for attempt in range(len(self.retry_delays) + 1):
+            try:
+                return self._authorized_request(connection, "GET", path)
+            except ConsoleRequestError as error:
+                retryable = error.status_code is None or error.status_code in RETRYABLE_GET_STATUSES
+                if not retryable or attempt >= len(self.retry_delays):
+                    raise
+                self.sleeper(self.retry_delays[attempt])
+        raise AssertionError("unreachable")
 
     def clear_tokens(self) -> None:
         with self._lock:
@@ -464,6 +488,35 @@ class ConsoleService:
         except ConsoleRequestError as error:
             return _request_error_payload(error)
 
+    def server_info(self) -> dict[str, Any]:
+        """Probe the documented health route and authenticated v2 API without guessing a product version."""
+        try:
+            connection = self.resolver.resolve()
+            health = self.client.get(connection, "/api/v1/status/")
+            if health not in (None, {}, ""):
+                raise ConsoleRequestError("Панель управления вернула неожиданный ответ status endpoint")
+            spaces = _as_items(self.client.get(connection, "/api/v2/spaces"), resource="пространств")
+            return {
+                "status": "ready",
+                "connection": connection.public_info(),
+                "health": "ready",
+                "api_version": CONSOLE_API_VERSION,
+                "contract_element_version": CONSOLE_CONTRACT_VERSION,
+                "server_product_version": None,
+                "compatibility": "api_compatible_product_version_unverified",
+                "spaces_count": len(spaces),
+                "capabilities": _console_capabilities(),
+                "message": (
+                    "Console API v2 доступен. Документированный API не сообщает версию продукта сервера; "
+                    f"контракт проверен для Element {CONSOLE_CONTRACT_VERSION}."
+                ),
+                **_external_metadata(),
+            }
+        except ConsoleConfigurationError as error:
+            return {"status": "missing", "message": str(error), **_external_metadata()}
+        except ConsoleRequestError as error:
+            return {**_request_error_payload(error), **_external_metadata()}
+
     def list_spaces(self) -> dict[str, Any]:
         try:
             connection = self.resolver.resolve()
@@ -538,6 +591,270 @@ class ConsoleService:
             return {"status": "not_available", "message": str(error)}
         except ConsoleRequestError as error:
             return _request_error_payload(error)
+
+    def list_space_applications(
+        self,
+        *,
+        space_id: str | None = None,
+        query: str | None = None,
+        status: str | None = None,
+        project_id: str | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        try:
+            offset, limit = _validate_page(offset, limit)
+            connection = self.resolver.resolve()
+            selected_space, selection = self._select_space(connection, space_id)
+            if selection is not None:
+                return {**selection, "applications": [], **_external_metadata()}
+            assert selected_space is not None
+            items = _as_items(
+                self.client.get(connection, f"/api/v2/spaces/{selected_space}/applications"),
+                resource="приложений пространства",
+            )
+            applications = [_application_payload(item) for item in items if isinstance(item, Mapping)]
+            normalized_query = query.strip().casefold() if query else None
+            normalized_status = status.strip().casefold() if status else None
+            normalized_project = _validate_uuid(project_id, "project_id") if project_id else None
+            filtered = [
+                application
+                for application in applications
+                if _application_matches(
+                    application,
+                    query=normalized_query,
+                    status=normalized_status,
+                    project_id=normalized_project,
+                )
+            ]
+            page = filtered[offset : offset + limit]
+            return {
+                "status": "ready",
+                "connection": connection.public_info(),
+                "space_id": selected_space,
+                "count": len(page),
+                "total": len(filtered),
+                "offset": offset,
+                "limit": limit,
+                "has_more": offset + len(page) < len(filtered),
+                "applications": page,
+                **_external_metadata(),
+            }
+        except ConsoleConfigurationError as error:
+            return _empty_list_result("applications", "missing", str(error))
+        except ConsoleRequestError as error:
+            return {
+                **_empty_list_result("applications", _request_status(error.status_code), str(error)),
+                "http_status": error.status_code,
+            }
+
+    def get_application(self, application_id: str | None = None) -> dict[str, Any]:
+        try:
+            connection = self.resolver.resolve()
+            selected, selection = self._select_application(connection, application_id)
+            if selection is not None:
+                return selection
+            assert selected is not None
+            application = self._application(connection, selected)
+            return {
+                "status": "ready",
+                "connection": connection.public_info(),
+                "selection_source": "explicit" if application_id else "ide_session",
+                "application": application,
+                **_external_metadata(),
+            }
+        except ConsoleConfigurationError as error:
+            return {"status": "missing", "message": str(error), **_external_metadata()}
+        except ConsoleRequestError as error:
+            return {**_request_error_payload(error), **_external_metadata()}
+
+    def get_application_status(self, application_id: str | None = None) -> dict[str, Any]:
+        return self._application_subresource(
+            application_id,
+            "status",
+            "application_status",
+            _application_status_payload,
+        )
+
+    def get_application_technology(self, application_id: str | None = None) -> dict[str, Any]:
+        return self._application_subresource(
+            application_id,
+            "technology",
+            "technology",
+            _application_technology_payload,
+        )
+
+    def get_application_project(self, application_id: str | None = None) -> dict[str, Any]:
+        return self._application_subresource(
+            application_id,
+            "project",
+            "project",
+            _application_project_payload,
+        )
+
+    def list_application_endpoints(self, application_id: str | None = None) -> dict[str, Any]:
+        try:
+            connection = self.resolver.resolve()
+            selected, selection = self._select_application(connection, application_id)
+            if selection is not None:
+                return {**selection, "count": 0, "endpoints": []}
+            assert selected is not None
+            items = _as_items(
+                self.client.get(connection, f"/api/v2/applications/{selected}/endpoints"),
+                resource="endpoint приложения",
+            )
+            endpoints = [_endpoint_payload(item) for item in items if isinstance(item, Mapping)]
+            return {
+                "status": "ready",
+                "connection": connection.public_info(),
+                "application_id": selected,
+                "count": len(endpoints),
+                "endpoints": endpoints,
+                **_external_metadata(),
+            }
+        except ConsoleConfigurationError as error:
+            return _empty_list_result("endpoints", "missing", str(error))
+        except ConsoleRequestError as error:
+            return {
+                **_empty_list_result("endpoints", _request_status(error.status_code), str(error)),
+                "http_status": error.status_code,
+            }
+
+    def list_project_assemblies(
+        self,
+        *,
+        project_id: str | None = None,
+        query: str | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        try:
+            offset, limit = _validate_page(offset, limit)
+            connection = self.resolver.resolve()
+            selected = project_id or connection.project_id
+            if not selected:
+                return _empty_list_result(
+                    "assemblies", "selection_required", "Не указан project_id и окружение не задаёт текущий проект"
+                )
+            selected = _validate_uuid(selected, "project_id")
+            items = _as_items(
+                self.client.get(connection, f"/api/v2/projects/{selected}/assemblies"),
+                resource="сборок проекта",
+            )
+            assemblies = [_assembly_payload(item) for item in items if isinstance(item, Mapping)]
+            if query:
+                needle = query.strip().casefold()
+                assemblies = [item for item in assemblies if _mapping_contains(item, needle)]
+            page = assemblies[offset : offset + limit]
+            return {
+                "status": "ready",
+                "connection": connection.public_info(),
+                "project_id": selected,
+                "count": len(page),
+                "total": len(assemblies),
+                "offset": offset,
+                "limit": limit,
+                "has_more": offset + len(page) < len(assemblies),
+                "assemblies": page,
+                **_external_metadata(),
+            }
+        except ConsoleConfigurationError as error:
+            return _empty_list_result("assemblies", "missing", str(error))
+        except ConsoleRequestError as error:
+            return {
+                **_empty_list_result("assemblies", _request_status(error.status_code), str(error)),
+                "http_status": error.status_code,
+            }
+
+    def get_project_assembly(self, version: str, project_id: str | None = None) -> dict[str, Any]:
+        try:
+            connection = self.resolver.resolve()
+            selected = project_id or connection.project_id
+            if not selected:
+                return {"status": "selection_required", "message": "Не указан project_id", **_external_metadata()}
+            selected = _validate_uuid(selected, "project_id")
+            version_segment = _validate_path_segment(version, "version")
+            value = self.client.get(
+                connection,
+                f"/api/v2/projects/{selected}/assemblies/{urllib.parse.quote(version_segment, safe='')}",
+            )
+            if not isinstance(value, Mapping):
+                raise ConsoleRequestError("Панель управления вернула некорректное описание сборки")
+            return {
+                "status": "ready",
+                "connection": connection.public_info(),
+                "project_id": selected,
+                "assembly": _assembly_payload(value),
+                **_external_metadata(),
+            }
+        except ConsoleConfigurationError as error:
+            return {"status": "missing", "message": str(error), **_external_metadata()}
+        except ConsoleRequestError as error:
+            return {**_request_error_payload(error), **_external_metadata()}
+
+    def list_tasks(
+        self,
+        task_type: Literal["application", "deployment_instance", "group"],
+        *,
+        status: str | None = None,
+        operation_type: str | None = None,
+        application_id: str | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        try:
+            offset, limit = _validate_page(offset, limit)
+            connection = self.resolver.resolve()
+            path = _task_collection_path(task_type)
+            items = _as_items(self.client.get(connection, path), resource="задач Console")
+            tasks = [_task_payload(item, task_type) for item in items if isinstance(item, Mapping)]
+            status_filter = status.strip().casefold() if status else None
+            operation_filter = operation_type.strip().casefold() if operation_type else None
+            application_filter = _validate_uuid(application_id, "application_id") if application_id else None
+            tasks = [item for item in tasks if _task_matches(item, status_filter, operation_filter, application_filter)]
+            page = tasks[offset : offset + limit]
+            return {
+                "status": "ready",
+                "connection": connection.public_info(),
+                "task_type": task_type,
+                "count": len(page),
+                "total": len(tasks),
+                "offset": offset,
+                "limit": limit,
+                "has_more": offset + len(page) < len(tasks),
+                "tasks": page,
+                **_external_metadata(),
+            }
+        except ConsoleConfigurationError as error:
+            return _empty_list_result("tasks", "missing", str(error))
+        except ConsoleRequestError as error:
+            return {
+                **_empty_list_result("tasks", _request_status(error.status_code), str(error)),
+                "http_status": error.status_code,
+            }
+
+    def get_task(
+        self,
+        task_type: Literal["application", "deployment_instance", "group"],
+        task_id: str,
+    ) -> dict[str, Any]:
+        try:
+            connection = self.resolver.resolve()
+            selected = _validate_uuid(task_id, "task_id")
+            value = self.client.get(connection, f"{_task_collection_path(task_type)}/{selected}")
+            if not isinstance(value, Mapping):
+                raise ConsoleRequestError("Панель управления вернула некорректное описание задачи")
+            return {
+                "status": "ready",
+                "connection": connection.public_info(),
+                "task_type": task_type,
+                "task": _task_payload(value, task_type),
+                **_external_metadata(),
+            }
+        except ConsoleConfigurationError as error:
+            return {"status": "missing", "message": str(error), **_external_metadata()}
+        except ConsoleRequestError as error:
+            return {**_request_error_payload(error), **_external_metadata()}
 
     def list_space_projects(
         self,
@@ -660,6 +977,52 @@ class ConsoleService:
         if not isinstance(returned_id, str) or not _same_uuid(returned_id, application_id):
             raise ConsoleRequestError("Панель управления вернула описание другого приложения")
         return _application_payload(value)
+
+    def _select_application(
+        self,
+        connection: ConsoleConnection,
+        explicit_application_id: str | None,
+    ) -> tuple[str | None, dict[str, Any] | None]:
+        if explicit_application_id:
+            return _validate_uuid(explicit_application_id, "application_id"), None
+        if connection.source == "ide_session" and connection.application_id:
+            return _validate_uuid(connection.application_id, "application_id"), None
+        return None, {
+            "status": "selection_required",
+            "message": (
+                "Укажите application_id. Без параметра текущее приложение доступно только из активной "
+                "Element IDE-сессии; в обычном VS Code оно не выводится из проекта автоматически."
+            ),
+            **_external_metadata(),
+        }
+
+    def _application_subresource(
+        self,
+        application_id: str | None,
+        path_resource: str,
+        response_key: str,
+        mapper: Callable[[Mapping[str, Any]], dict[str, Any]],
+    ) -> dict[str, Any]:
+        try:
+            connection = self.resolver.resolve()
+            selected, selection = self._select_application(connection, application_id)
+            if selection is not None:
+                return selection
+            assert selected is not None
+            value = self.client.get(connection, f"/api/v2/applications/{selected}/{path_resource}")
+            if not isinstance(value, Mapping):
+                raise ConsoleRequestError(f"Панель управления вернула некорректный ресурс приложения: {path_resource}")
+            return {
+                "status": "ready",
+                "connection": connection.public_info(),
+                "application_id": selected,
+                response_key: mapper(value),
+                **_external_metadata(),
+            }
+        except ConsoleConfigurationError as error:
+            return {"status": "missing", "message": str(error), **_external_metadata()}
+        except ConsoleRequestError as error:
+            return {**_request_error_payload(error), **_external_metadata()}
 
 
 def _environment_values(environ: Mapping[str, str]) -> dict[str, Any]:
@@ -1086,7 +1449,7 @@ def _as_items(value: Any, *, resource: str) -> list[Any]:
     if isinstance(value, list):
         return value
     if isinstance(value, dict):
-        for key in ("items", "data", "results"):
+        for key in ("items", "data", "results", "content"):
             items = value.get(key)
             if isinstance(items, list):
                 return items
@@ -1132,12 +1495,12 @@ def _application_payload(value: Mapping[str, Any]) -> dict[str, Any]:
     current_task = value.get("current-task", value.get("currentTask"))
     return {
         "id": value.get("id"),
-        "name": value.get("name"),
-        "display_name": value.get("display-name", value.get("displayName")),
-        "description": value.get("description"),
+        "name": _safe_external_text(value.get("name")),
+        "display_name": _safe_external_text(value.get("display-name", value.get("displayName"))),
+        "description": _safe_external_text(value.get("description")),
         "date_created": value.get("date-created", value.get("dateCreated")),
         "status": value.get("status"),
-        "error": value.get("error"),
+        "error": _safe_external_text(value.get("error")),
         "uri": value.get("uri"),
         "development_mode": value.get("development-mode", value.get("developmentMode")),
         "debugging": value.get("debugging"),
@@ -1162,18 +1525,211 @@ def _application_payload(value: Mapping[str, Any]) -> dict[str, Any]:
             if isinstance(source, Mapping)
             else None
         ),
-        "current_task": (
-            {
-                "id": current_task.get("id"),
-                "status": current_task.get("status"),
-                "operation_type": current_task.get("operation-type", current_task.get("operationType")),
-                "start_date": current_task.get("start-date", current_task.get("startDate")),
-                "end_date": current_task.get("end-date", current_task.get("endDate")),
-            }
-            if isinstance(current_task, Mapping)
-            else None
-        ),
+        "current_task": (_task_payload(current_task, "application") if isinstance(current_task, Mapping) else None),
+        "endpoint": (_endpoint_payload(value["endpoint"]) if isinstance(value.get("endpoint"), Mapping) else None),
     }
+
+
+def _application_status_payload(value: Mapping[str, Any]) -> dict[str, Any]:
+    current_task = value.get("current-task", value.get("currentTask"))
+    return {
+        "status": value.get("status"),
+        "current_task": _task_payload(current_task, "application") if isinstance(current_task, Mapping) else None,
+    }
+
+
+def _application_technology_payload(value: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "technology_version": value.get("technology-version", value.get("technologyVersion")),
+        "date_updated": value.get("date-updated", value.get("dateUpdated")),
+    }
+
+
+def _application_project_payload(value: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "id": value.get("id"),
+        "developer": _safe_external_text(value.get("developer")),
+        "version": _safe_external_text(value.get("version")),
+        "title": _safe_external_text(value.get("title")),
+        "hash": value.get("hash"),
+        "date_updated": value.get("date-updated", value.get("dateUpdated")),
+    }
+
+
+def _endpoint_payload(value: Mapping[str, Any]) -> dict[str, Any]:
+    # Deliberately excludes certificate and domain-validation payloads: they may contain private material/tokens.
+    return {
+        "id": value.get("id"),
+        "fqdn": _safe_external_text(value.get("fqdn")),
+        "context_path": _safe_external_text(value.get("context-path", value.get("contextPath"))),
+        "is_active": value.get("is-active", value.get("isActive")),
+        "status": value.get("status"),
+        "message": _safe_external_text(value.get("message")),
+        "certificate_type": value.get("certificate-type", value.get("certificateType")),
+    }
+
+
+def _assembly_payload(value: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "id": value.get("id"),
+        "assembly_version": _safe_external_text(value.get("assembly-version", value.get("assemblyVersion"))),
+        "created": value.get("created"),
+        "project_id": value.get("project-id", value.get("projectId")),
+        "project_name": _safe_external_text(value.get("project-name", value.get("projectName"))),
+        "project_version": _safe_external_text(value.get("project-version", value.get("projectVersion"))),
+        "project_developer": _safe_external_text(value.get("project-developer", value.get("projectDeveloper"))),
+        "branch_name": _safe_external_text(value.get("branch-name", value.get("branchName"))),
+        "commit_id": value.get("commit-id", value.get("commitId")),
+        "comment": _safe_external_text(value.get("comment")),
+        "modified": value.get("modified"),
+    }
+
+
+def _task_payload(
+    value: Mapping[str, Any],
+    task_type: Literal["application", "deployment_instance", "group"],
+) -> dict[str, Any]:
+    if task_type == "group":
+        nested = value.get("tasks")
+        nested_items = nested[:MAX_LIST_LIMIT] if isinstance(nested, list) else []
+        return {
+            "id": value.get("id"),
+            "type": value.get("type"),
+            "date_created": value.get("date-created", value.get("dateCreated")),
+            "created_by": _safe_external_text(value.get("created-by", value.get("createdBy"))),
+            "any_failure": value.get("any-failure", value.get("anyFailure")),
+            "completed_count": value.get("completed-count", value.get("completedCount")),
+            "cancelled_count": value.get("cancelled-count", value.get("cancelledCount")),
+            "total_count": value.get("total-count", value.get("totalCount")),
+            "status": value.get("status"),
+            "error_message": _safe_external_text(value.get("error-message", value.get("errorMessage"))),
+            "tasks": [_task_payload(item, "application") for item in nested_items if isinstance(item, Mapping)],
+            "tasks_truncated": isinstance(nested, list) and len(nested) > MAX_LIST_LIMIT,
+        }
+    return {
+        "id": value.get("id"),
+        "status": value.get("status"),
+        "operation_type": value.get("operation-type", value.get("operationType")),
+        "start_date": value.get("start-date", value.get("startDate")),
+        "end_date": value.get("end-date", value.get("endDate")),
+        "group_id": value.get("group-id", value.get("groupId")),
+        "application_id": (
+            value.get("application-id", value.get("applicationId")) if task_type == "application" else None
+        ),
+        "error_message": _safe_external_text(value.get("error-message", value.get("errorMessage"))),
+    }
+
+
+def _console_capabilities() -> dict[str, Any]:
+    return {
+        "contract_source": "normalized Element 9.2.4-6 Console API",
+        "read_only": True,
+        "resources": {
+            "spaces": ["list"],
+            "projects": ["list", "get", "assemblies"],
+            "applications": ["list", "get", "status", "technology", "project", "endpoints"],
+            "tasks": ["application", "deployment_instance", "group"],
+        },
+        "safe_get_retry": {"attempts": 3, "statuses": sorted(RETRYABLE_GET_STATUSES)},
+    }
+
+
+def _external_metadata() -> dict[str, str]:
+    return {
+        "data_source": "element_management_console",
+        "content_trust": "external_untrusted",
+        "contract_element_version": CONSOLE_CONTRACT_VERSION,
+    }
+
+
+def _empty_list_result(key: str, status: str, message: str) -> dict[str, Any]:
+    return {
+        "status": status,
+        "message": _safe_external_text(message),
+        "count": 0,
+        "total": 0,
+        key: [],
+        **_external_metadata(),
+    }
+
+
+def _validate_page(offset: int, limit: int) -> tuple[int, int]:
+    if offset < 0:
+        raise ConsoleConfigurationError("offset не может быть отрицательным")
+    if limit < 1 or limit > MAX_LIST_LIMIT:
+        raise ConsoleConfigurationError(f"limit должен быть от 1 до {MAX_LIST_LIMIT}")
+    return offset, limit
+
+
+def _validate_path_segment(value: str, name: str) -> str:
+    normalized = value.strip()
+    if not normalized or len(normalized) > 128 or any(character in normalized for character in "/\\\0\r\n"):
+        raise ConsoleConfigurationError(f"{name} содержит недопустимое значение")
+    return normalized
+
+
+def _application_matches(
+    application: Mapping[str, Any],
+    *,
+    query: str | None,
+    status: str | None,
+    project_id: str | None,
+) -> bool:
+    if query and not _mapping_contains(application, query):
+        return False
+    current_status = application.get("status")
+    if status and (not isinstance(current_status, str) or current_status.casefold() != status):
+        return False
+    current_project = _application_project_id(application)
+    return not project_id or bool(current_project and _same_uuid(current_project, project_id))
+
+
+def _mapping_contains(value: Mapping[str, Any], needle: str) -> bool:
+    return needle in " ".join(str(item) for item in value.values() if item is not None).casefold()
+
+
+def _task_matches(
+    task: Mapping[str, Any],
+    status: str | None,
+    operation_type: str | None,
+    application_id: str | None,
+) -> bool:
+    if status and str(task.get("status", "")).casefold() != status:
+        return False
+    if operation_type and str(task.get("operation_type", "")).casefold() != operation_type:
+        return False
+    current_application = task.get("application_id")
+    return not application_id or bool(
+        isinstance(current_application, str) and _same_uuid(current_application, application_id)
+    )
+
+
+def _task_collection_path(task_type: str) -> str:
+    paths = {
+        "application": "/api/v2/tasks/application-tasks",
+        "deployment_instance": "/api/v2/tasks/deployment-instance-tasks",
+        "group": "/api/v2/tasks/group-tasks",
+    }
+    try:
+        return paths[task_type]
+    except KeyError as error:
+        raise ConsoleConfigurationError("Неизвестный тип задачи Console") from error
+
+
+_SECRET_PATTERNS = (
+    re.compile(r"(?i)\b(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]+"),
+    re.compile(r"(?i)\b(?:client[_-]?secret|access[_-]?token|id[_-]?token|password)\s*[:=]\s*[^\s,;]+"),
+    re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b"),
+)
+
+
+def _safe_external_text(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    result = value
+    for pattern in _SECRET_PATTERNS:
+        result = pattern.sub("[скрыто]", result)
+    return result[:MAX_EXTERNAL_TEXT]
 
 
 def _application_project_id(application: Mapping[str, Any]) -> str | None:

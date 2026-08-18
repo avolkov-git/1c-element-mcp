@@ -23,6 +23,7 @@ OTHER_SPACE_ID = "22222222-2222-2222-2222-222222222222"
 PROJECT_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 OTHER_PROJECT_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 APPLICATION_ID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+TASK_ID = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
 
 
 def test_environment_connection_is_resolved_without_exposing_secret(tmp_path: Path) -> None:
@@ -589,3 +590,246 @@ def application_response(application_id: str, *, project_id: str) -> dict[str, A
         "default-user-list": "must-not-be-returned",
         "user-lists": ["must-not-be-returned"],
     }
+
+
+def test_console_server_info_reports_contract_without_guessing_remote_version(tmp_path: Path) -> None:
+    paths: list[str] = []
+
+    def requester(method: str, url: str, headers: Any, body: bytes | None, context: Any, timeout: float) -> Any:
+        paths.append(urllib.parse.urlsplit(url).path)
+        if url.endswith("/api/v1/status/"):
+            return None
+        if url.endswith("/api/v2/spaces"):
+            return [space_response(SPACE_ID, "Основное")]
+        raise AssertionError(url)
+
+    service = _console_service(tmp_path, requester)
+
+    result = service.server_info()
+
+    assert result["status"] == "ready"
+    assert result["health"] == "ready"
+    assert result["api_version"] == "v2"
+    assert result["contract_element_version"] == "9.2.4-6"
+    assert result["server_product_version"] is None
+    assert result["compatibility"] == "api_compatible_product_version_unverified"
+    assert result["capabilities"]["read_only"] is True
+    assert result["content_trust"] == "external_untrusted"
+    assert paths == ["/console/api/v1/status/", "/console/api/v2/spaces"]
+
+
+def test_console_get_retries_only_transient_safe_requests(tmp_path: Path) -> None:
+    calls = 0
+    delays: list[float] = []
+
+    def requester(method: str, url: str, headers: Any, body: bytes | None, context: Any, timeout: float) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise ConsoleRequestError("Временно недоступно", status_code=503)
+        return []
+
+    connection = ConsoleContextResolver(
+        ServerSettings(config_path=tmp_path / "config.json"),
+        environ={"ELEMENT_CONSOLE_URL": "https://element.example/console", "ELEMENT_CONSOLE_ACCESS_TOKEN": "x"},
+    ).resolve()
+    client = ConsoleHttpClient(requester=requester, retry_delays=(0.01, 0.02), sleeper=delays.append)
+
+    assert client.get(connection, "/api/v2/spaces") == []
+    assert calls == 3
+    assert delays == [0.01, 0.02]
+
+
+def test_list_space_applications_filters_pages_and_sanitizes(tmp_path: Path) -> None:
+    first = application_response(APPLICATION_ID, project_id=PROJECT_ID)
+    first["description"] = "Bearer very-secret must be hidden"
+    first["endpoint"] = {"id": "endpoint-1", "fqdn": "app.example", "certificate": "private-key"}
+    second = application_response("dddddddd-dddd-dddd-dddd-dddddddddddd", project_id=OTHER_PROJECT_ID)
+    second["display-name"] = "Архив"
+    second["status"] = "Stopped"
+
+    def requester(method: str, url: str, headers: Any, body: bytes | None, context: Any, timeout: float) -> Any:
+        if url.endswith(f"/api/v2/spaces/{SPACE_ID}/applications"):
+            return [first, second]
+        raise AssertionError(url)
+
+    result = _console_service(tmp_path, requester).list_space_applications(
+        space_id=SPACE_ID,
+        query="тестовое",
+        status="running",
+        project_id=PROJECT_ID,
+        limit=1,
+    )
+
+    assert result["count"] == result["total"] == 1
+    application = result["applications"][0]
+    assert application["id"] == APPLICATION_ID
+    assert application["description"] == "[скрыто] must be hidden"
+    assert application["endpoint"]["fqdn"] == "app.example"
+    serialized = json.dumps(result)
+    assert "very-secret" not in serialized
+    assert "private-key" not in serialized
+    assert "default-user-list" not in serialized
+
+
+def test_application_catalog_distinguishes_empty_from_forbidden(tmp_path: Path) -> None:
+    def empty_requester(method: str, url: str, headers: Any, body: bytes | None, context: Any, timeout: float) -> Any:
+        return []
+
+    empty = _console_service(tmp_path, empty_requester).list_space_applications(space_id=SPACE_ID)
+    assert empty["status"] == "ready"
+    assert empty["total"] == 0
+    assert empty["applications"] == []
+
+    def forbidden_requester(
+        method: str, url: str, headers: Any, body: bytes | None, context: Any, timeout: float
+    ) -> Any:
+        raise ConsoleRequestError("Нет прав", status_code=403)
+
+    forbidden = _console_service(tmp_path, forbidden_requester).list_space_applications(space_id=SPACE_ID)
+    assert forbidden["status"] == "forbidden"
+    assert forbidden["http_status"] == 403
+    assert forbidden["applications"] == []
+
+
+def test_application_selection_and_subresources_work_in_ide_and_vscode(tmp_path: Path) -> None:
+    paths: list[str] = []
+
+    def requester(method: str, url: str, headers: Any, body: bytes | None, context: Any, timeout: float) -> Any:
+        path = urllib.parse.urlsplit(url).path
+        paths.append(path)
+        if path.endswith(f"/applications/{APPLICATION_ID}"):
+            return application_response(APPLICATION_ID, project_id=PROJECT_ID)
+        if path.endswith(f"/applications/{APPLICATION_ID}/status"):
+            return {"status": "Running", "current-task": {"id": TASK_ID, "status": "InProgress"}}
+        if path.endswith(f"/applications/{APPLICATION_ID}/technology"):
+            return {"technology-version": "9.2.4", "date-updated": "2026-08-18T00:00:00Z"}
+        if path.endswith(f"/applications/{APPLICATION_ID}/project"):
+            return {"id": PROJECT_ID, "developer": "acme", "version": "1.2.3", "title": "Demo"}
+        if path.endswith(f"/applications/{APPLICATION_ID}/endpoints"):
+            return [
+                {
+                    "id": "endpoint-1",
+                    "fqdn": "demo.example",
+                    "context-path": "/demo",
+                    "certificate": "must-not-leak",
+                    "domain-validation": {"token": "must-not-leak"},
+                    "is-active": True,
+                    "status": "Ready",
+                }
+            ]
+        if path.endswith("/api/v2/spaces"):
+            return []
+        raise AssertionError(url)
+
+    standalone = _console_service(tmp_path, requester)
+    assert standalone.get_application()["status"] == "selection_required"
+    assert standalone.get_application(APPLICATION_ID)["selection_source"] == "explicit"
+    status = standalone.get_application_status(APPLICATION_ID)
+    assert status["status"] == "ready"
+    assert status["application_status"]["status"] == "Running"
+    assert standalone.get_application_technology(APPLICATION_ID)["technology"]["technology_version"] == "9.2.4"
+    assert standalone.get_application_project(APPLICATION_ID)["project"]["id"] == PROJECT_ID
+    endpoint_result = standalone.list_application_endpoints(APPLICATION_ID)
+    assert endpoint_result["endpoints"][0]["context_path"] == "/demo"
+    assert "must-not-leak" not in json.dumps(endpoint_result)
+
+    ide = ConsoleService(
+        ServerSettings(config_path=tmp_path / "ide-config.json"),
+        client=ConsoleHttpClient(requester=requester),
+    )
+    ide.configure_ide_session(
+        {
+            "server": "https://element.example/console",
+            "access_token": "ide-token",
+            "application_id": APPLICATION_ID,
+        }
+    )
+    assert ide.get_application()["selection_source"] == "ide_session"
+    assert paths.count(f"/console/api/v2/applications/{APPLICATION_ID}") == 2
+
+
+def test_project_assemblies_are_bounded_and_exact_version_is_encoded(tmp_path: Path) -> None:
+    urls: list[str] = []
+    assembly = {
+        "id": "assembly-1",
+        "assembly-version": "1.2 beta",
+        "project-id": PROJECT_ID,
+        "project-name": "Demo",
+        "branch-name": "main",
+        "commit-id": "abc123",
+        "comment": "client_secret=do-not-leak release",
+        "modified": False,
+    }
+
+    def requester(method: str, url: str, headers: Any, body: bytes | None, context: Any, timeout: float) -> Any:
+        urls.append(url)
+        if url.endswith(f"/projects/{PROJECT_ID}/assemblies"):
+            return [assembly]
+        if url.endswith(f"/projects/{PROJECT_ID}/assemblies/1.2%20beta"):
+            return assembly
+        raise AssertionError(url)
+
+    service = _console_service(tmp_path, requester)
+    listed = service.list_project_assemblies(project_id=PROJECT_ID, query="beta")
+    exact = service.get_project_assembly("1.2 beta", PROJECT_ID)
+
+    assert listed["count"] == 1
+    assert listed["assemblies"][0]["comment"] == "[скрыто] release"
+    assert exact["assembly"]["assembly_version"] == "1.2 beta"
+    assert urls[-1].endswith("/assemblies/1.2%20beta")
+    assert "do-not-leak" not in json.dumps([listed, exact])
+
+
+@pytest.mark.parametrize(
+    ("task_type", "collection"),
+    [
+        ("application", "application-tasks"),
+        ("deployment_instance", "deployment-instance-tasks"),
+        ("group", "group-tasks"),
+    ],
+)
+def test_console_task_types_use_exact_routes_and_safe_dtos(
+    tmp_path: Path,
+    task_type: str,
+    collection: str,
+) -> None:
+    paths: list[str] = []
+    task = {
+        "id": TASK_ID,
+        "status": "Completed",
+        "operation-type": "Update",
+        "application-id": APPLICATION_ID,
+        "error-message": "access_token=do-not-leak failure",
+        "tasks": [{"id": TASK_ID, "status": "Completed", "application-id": APPLICATION_ID}],
+    }
+
+    def requester(method: str, url: str, headers: Any, body: bytes | None, context: Any, timeout: float) -> Any:
+        path = urllib.parse.urlsplit(url).path
+        paths.append(path)
+        if path.endswith(f"/{collection}"):
+            return [task]
+        if path.endswith(f"/{collection}/{TASK_ID}"):
+            return task
+        raise AssertionError(url)
+
+    service = _console_service(tmp_path, requester)
+    listed = service.list_tasks(task_type, status="completed", limit=10)  # type: ignore[arg-type]
+    exact = service.get_task(task_type, TASK_ID)  # type: ignore[arg-type]
+
+    assert listed["count"] == 1
+    assert exact["task"]["id"] == TASK_ID
+    assert paths == [f"/console/api/v2/tasks/{collection}", f"/console/api/v2/tasks/{collection}/{TASK_ID}"]
+    assert "do-not-leak" not in json.dumps([listed, exact])
+
+
+def _console_service(tmp_path: Path, requester: Any) -> ConsoleService:
+    settings = ServerSettings(config_path=tmp_path / "config.json")
+    resolver = ConsoleContextResolver(
+        settings,
+        environ={
+            "ELEMENT_CONSOLE_URL": "https://element.example/console",
+            "ELEMENT_CONSOLE_ACCESS_TOKEN": "test-token",
+        },
+    )
+    return ConsoleService(settings, resolver=resolver, client=ConsoleHttpClient(requester=requester))

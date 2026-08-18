@@ -34,7 +34,7 @@ def test_stdio_server_exposes_read_only_tools(
         ):
             initialized = await session.initialize()
             assert initialized.serverInfo.name == "1C Element"
-            assert initialized.serverInfo.version == "0.15.0"
+            assert initialized.serverInfo.version == "0.16.0"
             assert initialized.instructions is not None
             assert "first call\nget_documentation_status" in initialized.instructions
             assert "Never call start_documentation_build without that consent" in initialized.instructions
@@ -69,7 +69,13 @@ def test_stdio_server_exposes_read_only_tools(
                 "get_server_entrypoint",
                 "get_component_connections",
                 "get_console_project",
+                "get_console_server_info",
                 "get_console_status",
+                "get_console_task",
+                "get_application",
+                "get_application_project",
+                "get_application_status",
+                "get_application_technology",
                 "get_current_application",
                 "get_document",
                 "get_documentation_build_status",
@@ -85,8 +91,13 @@ def test_stdio_server_exposes_read_only_tools(
                 "find_references",
                 "list_project_elements",
                 "list_console_spaces",
+                "list_console_tasks",
+                "list_application_endpoints",
+                "list_project_assemblies",
+                "list_space_applications",
                 "list_space_projects",
                 "match_console_project",
+                "get_project_assembly",
                 "read_project_file",
                 "search_docs",
                 "search_project_code",
@@ -103,7 +114,13 @@ def test_stdio_server_exposes_read_only_tools(
                 "get_server_entrypoint",
                 "get_component_connections",
                 "get_console_project",
+                "get_console_server_info",
                 "get_console_status",
+                "get_console_task",
+                "get_application",
+                "get_application_project",
+                "get_application_status",
+                "get_application_technology",
                 "get_current_application",
                 "get_document",
                 "get_documentation_build_status",
@@ -119,8 +136,13 @@ def test_stdio_server_exposes_read_only_tools(
                 "find_references",
                 "list_project_elements",
                 "list_console_spaces",
+                "list_console_tasks",
+                "list_application_endpoints",
+                "list_project_assemblies",
+                "list_space_applications",
                 "list_space_projects",
                 "match_console_project",
+                "get_project_assembly",
                 "read_project_file",
                 "search_docs",
                 "search_project_code",
@@ -137,6 +159,10 @@ def test_stdio_server_exposes_read_only_tools(
             assert "relative path" in (descriptions["read_project_file"] or "")
             assert "current IDE project" in (descriptions["list_space_projects"] or "")
             assert "exact published application" in (descriptions["get_current_application"] or "")
+            assert "without guessing" in (descriptions["get_console_server_info"] or "")
+            assert "explicit application" in (descriptions["get_application"] or "")
+            assert "without certificates" in (descriptions["list_application_endpoints"] or "")
+            assert "deployment-instance" in (descriptions["list_console_tasks"] or "")
             assert "bounded local workspace candidates" in (descriptions["match_console_project"] or "")
             assert "lexical ambiguity" in (descriptions["lookup_symbol"] or "")
             assert "compiler-level" in (descriptions["find_references"] or "")
@@ -192,6 +218,20 @@ def test_stdio_server_exposes_read_only_tools(
             assert console.isError is False
             assert console.structuredContent is not None
             assert console.structuredContent["status"] == "missing"
+
+            server_info = await session.call_tool("get_console_server_info", {})
+            assert server_info.isError is False
+            assert server_info.structuredContent is not None
+            assert server_info.structuredContent["status"] == "missing"
+            assert server_info.structuredContent["contract_element_version"] == "9.2.4-6"
+
+            explicit_application = await session.call_tool(
+                "get_application",
+                {"application_id": "cccccccc-cccc-cccc-cccc-cccccccccccc"},
+            )
+            assert explicit_application.isError is False
+            assert explicit_application.structuredContent is not None
+            assert explicit_application.structuredContent["status"] == "missing"
 
             application = await session.call_tool("get_current_application", {})
             assert application.isError is False
