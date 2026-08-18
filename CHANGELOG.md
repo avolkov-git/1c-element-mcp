@@ -2,6 +2,21 @@
 
 Проект следует [Semantic Versioning](https://semver.org/).
 
+## [0.18.0] - 2026-08-18
+
+- Добавлены read-only `get_hover` и `get_signature_help` поверх штатного Language Server Element.
+- Hover нормализует Markdown, plaintext и legacy MarkedString в ограниченные структурированные блоки; пустая
+  позиция не выдаётся за сбой.
+- Signature Help сохраняет перегрузки, активную сигнатуру и параметр, документацию, строковые и offset-метки;
+  число сигнатур, параметров и объём текста ограничены.
+- Позиции MCP остаются 1-based и преобразуются в 0-based UTF-16 LSP; закрытый документ открывается лениво.
+- `lsp_status` отдельно сообщает `ready`, `empty`, `unsupported`, `timeout`, `stopped` и `error`. Лексический
+  fallback показывает только найденные объявления и всегда снимает compiler-level гарантию.
+- Инициализация клиента теперь объявляет hover/signature capabilities, а статус показывает фактическую поддержку
+  сервера. В команду запуска добавлены JVM exports/opens, требуемые семантическим ядром Element 9.2.4.
+- Fake LSP и MCP protocol tests покрывают MarkupContent, MarkedString, перегрузки, пустые ответы, лимиты,
+  конвертацию позиции и деградацию runtime.
+
 ## [0.17.0] - 2026-08-18
 
 - Добавлен инкрементальный граф YAML-элементов, companion XBSL/XBQL, подсистем, environment, visibility и

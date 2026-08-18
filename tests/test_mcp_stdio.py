@@ -34,7 +34,7 @@ def test_stdio_server_exposes_read_only_tools(
         ):
             initialized = await session.initialize()
             assert initialized.serverInfo.name == "1C Element"
-            assert initialized.serverInfo.version == "0.17.0"
+            assert initialized.serverInfo.version == "0.18.0"
             assert initialized.instructions is not None
             assert "first call\nget_documentation_status" in initialized.instructions
             assert "Never call start_documentation_build without that consent" in initialized.instructions
@@ -50,6 +50,9 @@ def test_stdio_server_exposes_read_only_tools(
             assert "Use lookup_symbol for declarations" in initialized.instructions
             assert "first call get_language_server_status" in initialized.instructions
             assert "If exact tools report a lexical fallback" in initialized.instructions
+            assert "Use get_hover for the type and documentation" in initialized.instructions
+            assert "Use get_signature_help only at a call" in initialized.instructions
+            assert "An empty LSP response means" in initialized.instructions
             assert "call get_current_application" in initialized.instructions
             assert "Do not infer\na current application in ordinary VS Code" in initialized.instructions
             assert "use get_element_dependencies or get_project_dependency_graph" in initialized.instructions
@@ -86,12 +89,14 @@ def test_stdio_server_exposes_read_only_tools(
                 "get_documentation_status",
                 "get_element_dependencies",
                 "get_definition",
+                "get_hover",
                 "get_language_server_status",
                 "get_project_overview",
                 "get_project_status",
                 "get_project_diagnostics",
                 "get_project_dependency_graph",
                 "get_references",
+                "get_signature_help",
                 "get_related_docs",
                 "lookup_symbol",
                 "find_references",
@@ -139,12 +144,14 @@ def test_stdio_server_exposes_read_only_tools(
                 "get_documentation_status",
                 "get_element_dependencies",
                 "get_definition",
+                "get_hover",
                 "get_language_server_status",
                 "get_project_overview",
                 "get_project_status",
                 "get_project_diagnostics",
                 "get_project_dependency_graph",
                 "get_references",
+                "get_signature_help",
                 "get_related_docs",
                 "lookup_symbol",
                 "find_references",
@@ -183,6 +190,8 @@ def test_stdio_server_exposes_read_only_tools(
             assert "compiler-level" in (descriptions["find_references"] or "")
             assert "Element LSP" in (descriptions["get_definition"] or "")
             assert "Element LSP" in (descriptions["get_references"] or "")
+            assert "type and documentation" in (descriptions["get_hover"] or "")
+            assert "active parameter" in (descriptions["get_signature_help"] or "")
             assert "published by Element LSP" in (descriptions["get_project_diagnostics"] or "")
             assert "structured datasets" in (descriptions["list_reference_datasets"] or "")
             assert "resolved schemas" in (descriptions["get_api_operation"] or "")
@@ -239,6 +248,24 @@ def test_stdio_server_exposes_read_only_tools(
             assert definition.structuredContent is not None
             assert definition.structuredContent["analysis_mode"] == "syntax-aware lexical fallback"
             assert definition.structuredContent["semantic_guarantee"] is False
+
+            hover = await session.call_tool(
+                "get_hover",
+                {"relative_path": "Sales/Orders.xbsl", "line": 1, "column": 10},
+            )
+            assert hover.isError is False
+            assert hover.structuredContent is not None
+            assert hover.structuredContent["lsp_status"] == "stopped"
+            assert hover.structuredContent["analysis_mode"] == "syntax-aware lexical fallback"
+
+            signature = await session.call_tool(
+                "get_signature_help",
+                {"relative_path": "Sales/Orders.xbsl", "line": 1, "column": 20},
+            )
+            assert signature.isError is False
+            assert signature.structuredContent is not None
+            assert signature.structuredContent["lsp_status"] == "stopped"
+            assert signature.structuredContent["analysis_mode"] == "syntax-aware lexical fallback"
 
             related = await session.call_tool("get_related_docs", {"symbol": "FindOrder", "limit": 2})
             assert related.isError is False

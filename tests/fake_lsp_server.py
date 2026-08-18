@@ -33,6 +33,7 @@ while message := read_message():
     request_id = message.get("id")
     if method == "initialize":
         root_uri = message["params"]["rootUri"]
+        text_document_capabilities = message["params"]["capabilities"]["textDocument"]
         send(
             {
                 "jsonrpc": "2.0",
@@ -40,10 +41,17 @@ while message := read_message():
                 "result": {
                     "capabilities": {
                         "definitionProvider": True,
+                        "hoverProvider": True,
                         "referencesProvider": True,
+                        "signatureHelpProvider": {"triggerCharacters": ["(", ","]},
                         "textDocumentSync": 1,
                     },
-                    "serverInfo": {"name": "Fake Element LSP", "version": "9.2.4-1"},
+                    "serverInfo": {
+                        "name": "Fake Element LSP",
+                        "version": "9.2.4-1",
+                        "clientHover": "hover" in text_document_capabilities,
+                        "clientSignatureHelp": "signatureHelp" in text_document_capabilities,
+                    },
                 },
             }
         )
@@ -101,6 +109,52 @@ while message := read_message():
             "range": {"start": {"line": 0, "character": 7}, "end": {"line": 0, "character": 16}},
         }
         send({"jsonrpc": "2.0", "id": request_id, "result": [location, location]})
+    elif method == "textDocument/hover":
+        position = message["params"]["position"]
+        if position["character"] == 9:
+            result = None
+        elif position["character"] == 10:
+            result = {
+                "contents": [
+                    {"language": "xbsl", "value": "method FindOrder(Number: String): String"},
+                    "**MarkedString documentation**",
+                ]
+            }
+        else:
+            result = {
+                "contents": {"kind": "markdown", "value": "`FindOrder`: String\n\nFake documentation"},
+                "range": {
+                    "start": {"line": 0, "character": 7},
+                    "end": {"line": 0, "character": 16},
+                },
+            }
+        send({"jsonrpc": "2.0", "id": request_id, "result": result})
+    elif method == "textDocument/signatureHelp":
+        position = message["params"]["position"]
+        if position["character"] == 9:
+            result = {"signatures": []}
+        else:
+            result = {
+                "activeSignature": 1,
+                "activeParameter": 1,
+                "signatures": [
+                    {
+                        "label": "FindOrder(Number: String): String",
+                        "documentation": "First overload",
+                        "parameters": [{"label": "Number: String", "documentation": "Order number"}],
+                    },
+                    {
+                        "label": "FindOrder(Number: String, Strict: Boolean): String",
+                        "documentation": {"kind": "markdown", "value": "**Second overload**"},
+                        "parameters": [
+                            {"label": [10, 24]},
+                            {"label": "Strict: Boolean", "documentation": {"kind": "plaintext", "value": "Mode"}},
+                        ],
+                        "activeParameter": 1,
+                    },
+                ],
+            }
+        send({"jsonrpc": "2.0", "id": request_id, "result": result})
     elif method == "shutdown":
         send({"jsonrpc": "2.0", "id": request_id, "result": None})
     elif method == "exit":

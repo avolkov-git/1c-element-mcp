@@ -11,8 +11,13 @@ import element_mcp.language_server as language_server_module
 from element_mcp.config import ServerSettings
 from element_mcp.documentation import DocumentationService
 from element_mcp.language_server import (
+    MAX_HOVER_BLOCKS,
+    MAX_LSP_CONTENT_CHARS,
     LanguageServerService,
+    LanguageServerTimeout,
+    LanguageServerUnavailable,
     _JsonRpcProcess,
+    _normalize_lsp_content,
     inspect_language_server_runtime,
 )
 from element_mcp.project import ProjectService
@@ -58,6 +63,20 @@ def service(
     return LanguageServerService(settings, project, semantic)
 
 
+def attach_fake_client(language_server: LanguageServerService, root: Path) -> _JsonRpcProcess:
+    fake_server = Path(__file__).with_name("fake_lsp_server.py")
+    client = _JsonRpcProcess(
+        [sys.executable, str(fake_server)],
+        root=root,
+        notification_handler=language_server._notification,
+    )
+    client.start(timeout=5)
+    language_server._client = client
+    language_server._client_root = root
+    language_server._ensure_client = lambda: client  # type: ignore[method-assign]
+    return client
+
+
 def test_runtime_validation_matches_bundle_lsp_and_java(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -95,12 +114,138 @@ def test_json_rpc_process_initializes_and_handles_server_requests(tmp_path: Path
 
     assert client.element_version == "9.2.4"
     assert client.server_info["name"] == "Fake Element LSP"
+    assert client.server_info["clientHover"] is True
+    assert client.server_info["clientSignatureHelp"] is True
+    assert client.server_capabilities["hoverProvider"] is True
+    assert client.server_capabilities["signatureHelpProvider"]["triggerCharacters"] == ["(", ","]
     assert definition["range"]["start"] == {"line": 0, "character": 7}
     assert {method for method, _ in notifications} >= {
         "builder/builderStateChanged",
         "textDocument/publishDiagnostics",
     }
     client.stop()
+
+
+def test_hover_normalizes_markup_marked_strings_empty_and_range(
+    tmp_path: Path,
+    element_project_path: Path,
+    corpus_path: Path,
+) -> None:
+    language_server = service(tmp_path, element_project_path, corpus_path)
+    attach_fake_client(language_server, element_project_path)
+    try:
+        markdown = language_server.hover("Sales/Orders.xbsl", 1, 9)
+        opened_document = (element_project_path / "Sales" / "Orders.xbsl").as_uri()
+        assert language_server._documents[opened_document][1] == 1
+        empty = language_server.hover("Sales/Orders.xbsl", 1, 10)
+        marked_strings = language_server.hover("Sales/Orders.xbsl", 1, 11)
+    finally:
+        language_server.close()
+
+    assert markdown["lsp_status"] == "ready"
+    assert markdown["semantic_guarantee"] is True
+    assert markdown["contents"] == [{"kind": "markdown", "value": "`FindOrder`: String\n\nFake documentation"}]
+    assert markdown["range"] == {"line": 1, "column": 8, "end_line": 1, "end_column": 17}
+    assert empty["lsp_status"] == "empty"
+    assert empty["found"] is False
+    assert empty["contents"] == []
+    assert marked_strings["contents"] == [
+        {"kind": "code", "language": "xbsl", "value": "method FindOrder(Number: String): String"},
+        {"kind": "markdown", "value": "**MarkedString documentation**"},
+    ]
+
+
+def test_signature_help_normalizes_overloads_parameters_and_documentation(
+    tmp_path: Path,
+    element_project_path: Path,
+    corpus_path: Path,
+) -> None:
+    language_server = service(tmp_path, element_project_path, corpus_path)
+    attach_fake_client(language_server, element_project_path)
+    try:
+        result = language_server.signature_help("Sales/Orders.xbsl", 1, 12)
+        empty = language_server.signature_help("Sales/Orders.xbsl", 1, 10)
+    finally:
+        language_server.close()
+
+    assert result["lsp_status"] == "ready"
+    assert result["active_signature"] == 1
+    assert result["active_parameter"] == 1
+    assert result["count"] == 2
+    assert result["signatures"][0]["documentation"] == [{"kind": "plaintext", "value": "First overload"}]
+    assert result["signatures"][1] == {
+        "label": "FindOrder(Number: String, Strict: Boolean): String",
+        "documentation": [{"kind": "markdown", "value": "**Second overload**"}],
+        "parameters": [
+            {"label_offsets": [10, 24], "documentation": []},
+            {"label": "Strict: Boolean", "documentation": [{"kind": "plaintext", "value": "Mode"}]},
+        ],
+        "active_parameter": 1,
+    }
+    assert empty["lsp_status"] == "empty"
+    assert empty["signatures"] == []
+
+
+def test_hover_and_signature_help_distinguish_unsupported_timeout_and_stopped(
+    tmp_path: Path,
+    element_project_path: Path,
+    corpus_path: Path,
+) -> None:
+    language_server = service(tmp_path, element_project_path, corpus_path)
+    client = attach_fake_client(language_server, element_project_path)
+    original_request = client.request
+    try:
+        client.server_capabilities["hoverProvider"] = False
+        unsupported = language_server.hover("Sales/Orders.xbsl", 1, 10)
+
+        client.server_capabilities["signatureHelpProvider"] = True
+
+        def timeout(method: str, params=None, *, timeout: float = 20.0):
+            if method == "textDocument/signatureHelp":
+                raise LanguageServerTimeout("test timeout")
+            return original_request(method, params, timeout=timeout)
+
+        client.request = timeout  # type: ignore[method-assign]
+        timed_out = language_server.signature_help("Sales/Orders.xbsl", 1, 12)
+
+        def stopped(method: str, params=None, *, timeout: float = 20.0):
+            if method == "textDocument/hover":
+                raise LanguageServerUnavailable("test stopped process")
+            return original_request(method, params, timeout=timeout)
+
+        client.server_capabilities["hoverProvider"] = True
+        client.request = stopped  # type: ignore[method-assign]
+        stopped_result = language_server.hover("Sales/Orders.xbsl", 1, 10)
+    finally:
+        client.request = original_request  # type: ignore[method-assign]
+        language_server.close()
+
+    assert unsupported["lsp_status"] == "unsupported"
+    assert unsupported["analysis_mode"] == "syntax-aware lexical fallback"
+    assert timed_out["lsp_status"] == "timeout"
+    assert timed_out["semantic_guarantee"] is False
+    assert stopped_result["lsp_status"] == "stopped"
+    assert stopped_result["semantic_guarantee"] is False
+
+
+def test_lsp_position_is_one_based_and_uses_utf16(tmp_path: Path) -> None:
+    source = tmp_path / "Unicode.xbsl"
+    source.write_text("🙂Method()\n", encoding="utf-8")
+
+    assert LanguageServerService._lsp_position(source, 1, 1) == {"line": 0, "character": 0}
+    assert LanguageServerService._lsp_position(source, 1, 2) == {"line": 0, "character": 2}
+    assert LanguageServerService._lsp_position(source, 1, 9) == {"line": 0, "character": 9}
+
+
+def test_lsp_content_is_bounded() -> None:
+    blocks, truncated = _normalize_lsp_content(
+        ["x" * MAX_LSP_CONTENT_CHARS, *(["overflow"] * MAX_HOVER_BLOCKS)],
+        string_kind="markdown",
+    )
+
+    assert truncated is True
+    assert len(blocks) <= MAX_HOVER_BLOCKS
+    assert sum(len(block["value"]) for block in blocks) <= MAX_LSP_CONTENT_CHARS
 
 
 def test_definition_falls_back_honestly_when_lsp_is_missing(

@@ -81,9 +81,12 @@ paths_required is returned, ask for current diff paths and call the tool again w
 recommend a second Git process inside Element IDE.
 
 For compiler-level navigation and diagnostics, first call get_language_server_status. If it is ready, prefer
-get_definition, get_references, and get_project_diagnostics over lexical tools. These tools start the official
+get_definition, get_references, get_hover, get_signature_help, and get_project_diagnostics over lexical tools.
+Use get_hover for the type and documentation at an exact source position. Use get_signature_help only at a call
+position when the active overload or parameter matters. These tools start the official
 Element Language Server lazily and keep one isolated process for the active project. Preserve analysis_mode,
-semantic_guarantee, source, and fallback_reason in the answer. If the Language Server is missing, call
+semantic_guarantee, source, lsp_status, and fallback_reason in the answer. An empty LSP response means that no
+information is available at that position; it is not a server failure. If the Language Server is missing, call
 discover_element_installations and ask the user to choose a bundle when needed; call configure_language_server
 only with a user-confirmed bundle path. Never ask the user to paste a shell command as a Language Server command.
 If exact tools report a lexical fallback, say that the result is not compiler-proven. Lexical fallback cannot
@@ -553,6 +556,24 @@ def create_server(settings: ServerSettings) -> FastMCP:
             include_declaration=include_declaration,
             limit=limit,
         )
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def get_hover(
+        relative_path: Annotated[str, Field(min_length=1, max_length=4096)],
+        line: Annotated[int, Field(ge=1)],
+        column: Annotated[int, Field(ge=1)],
+    ) -> dict[str, Any]:
+        """Return bounded type and documentation at a 1-based position via Element LSP, with honest fallback."""
+        return language_server.hover(relative_path, line, column)
+
+    @server.tool(annotations=READ_ONLY, structured_output=True)
+    def get_signature_help(
+        relative_path: Annotated[str, Field(min_length=1, max_length=4096)],
+        line: Annotated[int, Field(ge=1)],
+        column: Annotated[int, Field(ge=1)],
+    ) -> dict[str, Any]:
+        """Return bounded overloads and the active parameter at a 1-based call position via Element LSP."""
+        return language_server.signature_help(relative_path, line, column)
 
     @server.tool(annotations=READ_ONLY, structured_output=True)
     def get_project_diagnostics(

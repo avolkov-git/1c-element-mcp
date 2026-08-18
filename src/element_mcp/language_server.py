@@ -26,6 +26,11 @@ LSP_JAR_PATTERN = "com.e1c.g5rt.lsp.server.appengine-*.jar"
 MINIMUM_JAVA_VERSION = 11
 DEFAULT_REQUEST_TIMEOUT = 20.0
 MAX_MESSAGE_BYTES = 32 * 1024 * 1024
+MAX_HOVER_BLOCKS = 16
+MAX_SIGNATURES = 20
+MAX_SIGNATURE_PARAMETERS = 50
+MAX_LSP_TEXT_CHARS = 8_000
+MAX_LSP_CONTENT_CHARS = 24_000
 
 
 class LanguageServerError(RuntimeError):
@@ -34,6 +39,58 @@ class LanguageServerError(RuntimeError):
 
 class LanguageServerUnavailable(LanguageServerError):
     pass
+
+
+class LanguageServerTimeout(LanguageServerError):
+    pass
+
+
+def _bounded_text(value: Any, maximum: int = MAX_LSP_TEXT_CHARS) -> tuple[str, bool]:
+    text = value if isinstance(value, str) else ""
+    if len(text) <= maximum:
+        return text, False
+    return text[: maximum - 1] + "…", True
+
+
+def _normalize_lsp_content(
+    value: Any,
+    *,
+    string_kind: str,
+    maximum_blocks: int = MAX_HOVER_BLOCKS,
+    maximum_chars: int = MAX_LSP_CONTENT_CHARS,
+) -> tuple[list[dict[str, Any]], bool]:
+    raw_items = value if isinstance(value, list) else [value]
+    blocks: list[dict[str, Any]] = []
+    truncated = len(raw_items) > maximum_blocks
+    remaining = maximum_chars
+    for item in raw_items[:maximum_blocks]:
+        block: dict[str, Any] | None = None
+        if isinstance(item, str):
+            block = {"kind": string_kind, "value": item}
+        elif isinstance(item, dict):
+            if isinstance(item.get("language"), str) and isinstance(item.get("value"), str):
+                block = {"kind": "code", "language": item["language"], "value": item["value"]}
+            elif item.get("kind") in {"markdown", "plaintext"} and isinstance(item.get("value"), str):
+                block = {"kind": item["kind"], "value": item["value"]}
+        if block is None or not block["value"]:
+            continue
+        maximum = min(MAX_LSP_TEXT_CHARS, remaining)
+        if maximum <= 0:
+            truncated = True
+            break
+        block["value"], text_truncated = _bounded_text(block["value"], maximum)
+        truncated = truncated or text_truncated
+        remaining -= len(block["value"])
+        blocks.append(block)
+    return blocks, truncated
+
+
+def _lsp_failure_status(error: LanguageServerError) -> str:
+    if isinstance(error, LanguageServerTimeout):
+        return "timeout"
+    if isinstance(error, LanguageServerUnavailable):
+        return "stopped"
+    return "error"
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,12 +247,26 @@ class _JsonRpcProcess:
                 "rootUri": root_uri,
                 "workspaceFolders": [{"uri": root_uri, "name": self.root.name}],
                 "capabilities": {
+                    "general": {"positionEncodings": ["utf-16"]},
                     "workspace": {"configuration": True, "workspaceFolders": True},
                     "window": {"workDoneProgress": True},
                     "textDocument": {
                         "synchronization": {"dynamicRegistration": False, "didSave": True},
                         "definition": {"dynamicRegistration": False, "linkSupport": True},
                         "references": {"dynamicRegistration": False},
+                        "hover": {
+                            "dynamicRegistration": False,
+                            "contentFormat": ["markdown", "plaintext"],
+                        },
+                        "signatureHelp": {
+                            "dynamicRegistration": False,
+                            "contextSupport": True,
+                            "signatureInformation": {
+                                "documentationFormat": ["markdown", "plaintext"],
+                                "parameterInformation": {"labelOffsetSupport": True},
+                                "activeParameterSupport": True,
+                            },
+                        },
                         "publishDiagnostics": {
                             "relatedInformation": True,
                             "versionSupport": True,
@@ -233,7 +304,7 @@ class _JsonRpcProcess:
             with self._pending_lock:
                 self._pending.pop(request_id, None)
             self.notify("$/cancelRequest", {"id": request_id})
-            raise LanguageServerError(f"Language Server не ответил на {method} за {timeout:g} с")
+            raise LanguageServerTimeout(f"Language Server не ответил на {method} за {timeout:g} с")
         response = pending.response or {}
         if "error" in response:
             error = response["error"]
@@ -459,8 +530,14 @@ class LanguageServerService:
                     "reported_element_version": client.element_version,
                     "server_info": client.server_info,
                     "capabilities": {
-                        key: key in client.server_capabilities
-                        for key in ("definitionProvider", "referencesProvider", "textDocumentSync")
+                        key: bool(client.server_capabilities.get(key))
+                        for key in (
+                            "definitionProvider",
+                            "referencesProvider",
+                            "hoverProvider",
+                            "signatureHelpProvider",
+                            "textDocumentSync",
+                        )
                     },
                     "builder_state": self._builder_state,
                     "indexer_state": self._indexer_state,
@@ -473,7 +550,7 @@ class LanguageServerService:
             client, path, uri = self._document(relative_path)
             result = client.request(
                 "textDocument/definition",
-                {"textDocument": {"uri": uri}, "position": {"line": line - 1, "character": column - 1}},
+                {"textDocument": {"uri": uri}, "position": self._lsp_position(path, line, column)},
             )
             raw_locations = [] if result is None else result if isinstance(result, list) else [result]
             return {
@@ -504,7 +581,7 @@ class LanguageServerService:
                 "textDocument/references",
                 {
                     "textDocument": {"uri": uri},
-                    "position": {"line": line - 1, "character": column - 1},
+                    "position": self._lsp_position(path, line, column),
                     "context": {"includeDeclaration": include_declaration},
                 },
             )
@@ -523,6 +600,107 @@ class LanguageServerService:
             }
         except LanguageServerError as error:
             return self._fallback_references(relative_path, line, column, include_declaration, limit, str(error))
+
+    def hover(self, relative_path: str, line: int, column: int) -> dict[str, Any]:
+        try:
+            client, path, uri = self._document(relative_path)
+            query = self._query(path, line, column)
+            if not client.server_capabilities.get("hoverProvider"):
+                return self._fallback_hover(
+                    relative_path,
+                    line,
+                    column,
+                    "Language Server не объявил capability hoverProvider",
+                    lsp_status="unsupported",
+                )
+            result = client.request(
+                "textDocument/hover",
+                {"textDocument": {"uri": uri}, "position": self._lsp_position(path, line, column)},
+            )
+            contents, truncated = _normalize_lsp_content(
+                result.get("contents") if isinstance(result, dict) else None,
+                string_kind="markdown",
+            )
+            found = bool(contents)
+            return {
+                "status": "ready",
+                "lsp_status": "ready" if found else "empty",
+                "analysis_mode": "Element Language Server",
+                "semantic_guarantee": True,
+                "source": "element-language-server",
+                "query": query,
+                "found": found,
+                "contents": contents,
+                "range": self._public_range(result.get("range")) if isinstance(result, dict) else None,
+                "truncated": truncated,
+                "language_server": self.status(),
+            }
+        except LanguageServerError as error:
+            return self._fallback_hover(
+                relative_path,
+                line,
+                column,
+                str(error),
+                lsp_status=_lsp_failure_status(error),
+            )
+
+    def signature_help(self, relative_path: str, line: int, column: int) -> dict[str, Any]:
+        try:
+            client, path, uri = self._document(relative_path)
+            query = self._query(path, line, column)
+            if not client.server_capabilities.get("signatureHelpProvider"):
+                return self._fallback_signature_help(
+                    relative_path,
+                    line,
+                    column,
+                    "Language Server не объявил capability signatureHelpProvider",
+                    lsp_status="unsupported",
+                )
+            result = client.request(
+                "textDocument/signatureHelp",
+                {
+                    "textDocument": {"uri": uri},
+                    "position": self._lsp_position(path, line, column),
+                    "context": {"triggerKind": 1, "isRetrigger": False},
+                },
+            )
+            signatures, truncated = self._normalize_signatures(result)
+            found = bool(signatures)
+            active_signature = self._bounded_index(
+                result.get("activeSignature") if isinstance(result, dict) else None,
+                len(signatures),
+            )
+            parameter_count = (
+                len(signatures[active_signature]["parameters"])
+                if active_signature is not None
+                else max((len(signature["parameters"]) for signature in signatures), default=0)
+            )
+            return {
+                "status": "ready",
+                "lsp_status": "ready" if found else "empty",
+                "analysis_mode": "Element Language Server",
+                "semantic_guarantee": True,
+                "source": "element-language-server",
+                "query": query,
+                "found": found,
+                "active_signature": active_signature,
+                "active_parameter": self._bounded_index(
+                    result.get("activeParameter") if isinstance(result, dict) else None,
+                    parameter_count,
+                ),
+                "count": len(signatures),
+                "signatures": signatures,
+                "truncated": truncated,
+                "language_server": self.status(),
+            }
+        except LanguageServerError as error:
+            return self._fallback_signature_help(
+                relative_path,
+                line,
+                column,
+                str(error),
+                lsp_status=_lsp_failure_status(error),
+            )
 
     def diagnostics(
         self,
@@ -630,6 +808,12 @@ class LanguageServerService:
                 "--add-opens=java.base/java.lang=ALL-UNNAMED",
                 "--add-opens=java.base/java.nio=ALL-UNNAMED",
                 "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED",
+                "--add-exports=java.base/jdk.internal.misc=ALL-UNNAMED",
+                "--add-exports=java.base/sun.nio.ch=ALL-UNNAMED",
+                "--add-exports=java.management/com.sun.jmx.mbeanserver=ALL-UNNAMED",
+                "--add-exports=jdk.internal.jvmstat/sun.jvmstat.monitor=ALL-UNNAMED",
+                "--add-exports=java.base/sun.reflect.generics.reflectiveObjects=ALL-UNNAMED",
+                "--add-opens=jdk.management/com.sun.management.internal=ALL-UNNAMED",
                 "-cp",
                 classpath,
                 MAIN_CLASS,
@@ -749,6 +933,255 @@ class LanguageServerService:
             "query_position": {"path": relative_path, "line": line, "column": column, "symbol": symbol},
             "language_server": self.status(),
         }
+
+    def _fallback_hover(
+        self,
+        relative_path: str,
+        line: int,
+        column: int,
+        reason: str,
+        *,
+        lsp_status: str,
+    ) -> dict[str, Any]:
+        query = {"path": relative_path, "line": line, "column": column}
+        try:
+            symbol = self._symbol_at(relative_path, line, column)
+            lookup = self.semantic.lookup_symbol(symbol, limit=10)
+        except (ProjectError, ValueError) as error:
+            return {
+                "status": "unavailable",
+                "lsp_status": lsp_status,
+                "message": reason,
+                "analysis_mode": "none",
+                "semantic_guarantee": False,
+                "source": "none",
+                "fallback_error": str(error),
+                "query": query,
+                "found": False,
+                "contents": [],
+                "range": None,
+                "truncated": False,
+                "language_server": self.status(),
+            }
+        contents = []
+        for item in lookup["matches"]:
+            declaration = item["declaration"]
+            contents.append(
+                {
+                    "kind": "code",
+                    "language": self._language_id(Path(declaration["path"])),
+                    "value": declaration["text"],
+                }
+            )
+        query["symbol"] = symbol
+        return {
+            "status": "ready",
+            "lsp_status": lsp_status,
+            "analysis_mode": "syntax-aware lexical fallback",
+            "semantic_guarantee": False,
+            "source": "lexical-index",
+            "fallback_reason": reason,
+            "query": query,
+            "found": bool(contents),
+            "contents": contents,
+            "matches": lookup["matches"],
+            "ambiguity": lookup["resolution"],
+            "range": None,
+            "truncated": lookup["truncated"],
+            "language_server": self.status(),
+        }
+
+    def _fallback_signature_help(
+        self,
+        relative_path: str,
+        line: int,
+        column: int,
+        reason: str,
+        *,
+        lsp_status: str,
+    ) -> dict[str, Any]:
+        query = {"path": relative_path, "line": line, "column": column}
+        try:
+            symbol = self._call_symbol_at(relative_path, line, column)
+            lookup = self.semantic.lookup_symbol(symbol, symbol_kind="method", limit=MAX_SIGNATURES)
+        except (ProjectError, ValueError) as error:
+            return {
+                "status": "unavailable",
+                "lsp_status": lsp_status,
+                "message": reason,
+                "analysis_mode": "none",
+                "semantic_guarantee": False,
+                "source": "none",
+                "fallback_error": str(error),
+                "query": query,
+                "found": False,
+                "active_signature": None,
+                "active_parameter": None,
+                "count": 0,
+                "signatures": [],
+                "truncated": False,
+                "language_server": self.status(),
+            }
+        signatures = []
+        for item in lookup["matches"]:
+            declaration = item["declaration"]
+            label, label_truncated = _bounded_text(declaration["text"].strip())
+            signatures.append(
+                {
+                    "label": label,
+                    "documentation": [],
+                    "parameters": [],
+                    "active_parameter": None,
+                    "declaration": declaration,
+                    "truncated": label_truncated,
+                }
+            )
+        query["symbol"] = symbol
+        return {
+            "status": "ready",
+            "lsp_status": lsp_status,
+            "analysis_mode": "syntax-aware lexical fallback",
+            "semantic_guarantee": False,
+            "source": "lexical-index",
+            "fallback_reason": reason,
+            "limitation": (
+                "Fallback показывает строки объявлений, но не разрешает типы, перегрузки и активный параметр."
+            ),
+            "query": query,
+            "found": bool(signatures),
+            "active_signature": None,
+            "active_parameter": None,
+            "count": len(signatures),
+            "signatures": signatures,
+            "ambiguity": lookup["resolution"],
+            "truncated": lookup["truncated"] or any(item["truncated"] for item in signatures),
+            "language_server": self.status(),
+        }
+
+    def _normalize_signatures(self, result: Any) -> tuple[list[dict[str, Any]], bool]:
+        raw_signatures = result.get("signatures") if isinstance(result, dict) else None
+        if not isinstance(raw_signatures, list):
+            return [], False
+        signatures: list[dict[str, Any]] = []
+        truncated = len(raw_signatures) > MAX_SIGNATURES
+        remaining = MAX_LSP_CONTENT_CHARS
+        for raw in raw_signatures[:MAX_SIGNATURES]:
+            if not isinstance(raw, dict) or not isinstance(raw.get("label"), str):
+                continue
+            if remaining <= 0:
+                truncated = True
+                break
+            label, label_truncated = _bounded_text(raw["label"], min(MAX_LSP_TEXT_CHARS, remaining))
+            remaining = max(0, remaining - len(label))
+            documentation, documentation_truncated = _normalize_lsp_content(
+                raw.get("documentation"),
+                string_kind="plaintext",
+                maximum_chars=remaining,
+            )
+            remaining = max(0, remaining - sum(len(block["value"]) for block in documentation))
+            parameters: list[dict[str, Any]] = []
+            raw_parameters = raw.get("parameters")
+            if isinstance(raw_parameters, list):
+                truncated = truncated or len(raw_parameters) > MAX_SIGNATURE_PARAMETERS
+                for parameter in raw_parameters[:MAX_SIGNATURE_PARAMETERS]:
+                    if not isinstance(parameter, dict):
+                        continue
+                    if remaining <= 0:
+                        truncated = True
+                        break
+                    normalized: dict[str, Any] = {}
+                    parameter_label = parameter.get("label")
+                    if isinstance(parameter_label, str):
+                        normalized["label"], parameter_truncated = _bounded_text(
+                            parameter_label,
+                            min(MAX_LSP_TEXT_CHARS, remaining),
+                        )
+                        remaining -= len(normalized["label"])
+                        truncated = truncated or parameter_truncated
+                    elif (
+                        isinstance(parameter_label, list)
+                        and len(parameter_label) == 2
+                        and all(isinstance(item, int) and not isinstance(item, bool) for item in parameter_label)
+                    ):
+                        normalized["label_offsets"] = parameter_label
+                    parameter_docs, parameter_docs_truncated = _normalize_lsp_content(
+                        parameter.get("documentation"),
+                        string_kind="plaintext",
+                        maximum_chars=remaining,
+                    )
+                    remaining = max(0, remaining - sum(len(block["value"]) for block in parameter_docs))
+                    normalized["documentation"] = parameter_docs
+                    truncated = truncated or parameter_docs_truncated
+                    parameters.append(normalized)
+            signatures.append(
+                {
+                    "label": label,
+                    "documentation": documentation,
+                    "parameters": parameters,
+                    "active_parameter": self._bounded_index(raw.get("activeParameter"), len(parameters)),
+                }
+            )
+            truncated = truncated or label_truncated or documentation_truncated
+            if remaining <= 0:
+                truncated = truncated or len(signatures) < len(raw_signatures)
+                break
+        return signatures, truncated
+
+    def _query(self, path: Path, line: int, column: int) -> dict[str, Any]:
+        root = self._client_root or self.project._required_root()
+        return {"path": path.relative_to(root).as_posix(), "line": line, "column": column}
+
+    @staticmethod
+    def _non_negative_int(value: Any) -> int | None:
+        return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+    @classmethod
+    def _bounded_index(cls, value: Any, length: int) -> int | None:
+        index = cls._non_negative_int(value)
+        return index if index is not None and index < length else None
+
+    @staticmethod
+    def _public_range(value: Any) -> dict[str, int] | None:
+        if not isinstance(value, dict):
+            return None
+        start = value.get("start")
+        end = value.get("end")
+        if not isinstance(start, dict) or not isinstance(end, dict):
+            return None
+        return {
+            "line": int(start.get("line", 0)) + 1,
+            "column": int(start.get("character", 0)) + 1,
+            "end_line": int(end.get("line", start.get("line", 0))) + 1,
+            "end_column": int(end.get("character", start.get("character", 0))) + 1,
+        }
+
+    @staticmethod
+    def _lsp_position(path: Path, line: int, column: int) -> dict[str, int]:
+        text, _ = _read_source_text(path)
+        lines = text.splitlines()
+        if line < 1 or line > len(lines):
+            raise ValueError(f"Строка {line} находится за пределами файла {path.name}")
+        source_line = lines[line - 1]
+        if column < 1 or column > len(source_line) + 1:
+            raise ValueError(f"Колонка {column} находится за пределами строки {line}")
+        utf16_character = len(source_line[: column - 1].encode("utf-16-le")) // 2
+        return {"line": line - 1, "character": utf16_character}
+
+    def _call_symbol_at(self, relative_path: str, line: int, column: int) -> str:
+        root = self.project._required_root()
+        path = self.project._resolve_source_file(root, relative_path)
+        text, _ = _read_source_text(path)
+        lines = text.splitlines()
+        if line < 1 or line > len(lines):
+            raise ValueError(f"Строка {line} находится за пределами файла {relative_path}")
+        source_line = lines[line - 1]
+        if column < 1 or column > len(source_line) + 1:
+            raise ValueError(f"Колонка {column} находится за пределами строки {line}")
+        prefix = "\n".join([*lines[max(0, line - 20) : line - 1], source_line[: column - 1]])
+        calls = list(re.finditer(r"([^\W\d]\w*)\s*\(", prefix, re.UNICODE))
+        if not calls:
+            raise ValueError(f"В позиции {relative_path}:{line}:{column} не найден вызов метода")
+        return calls[-1].group(1)
 
     def _symbol_at(self, relative_path: str, line: int, column: int) -> str:
         root = self.project._required_root()
