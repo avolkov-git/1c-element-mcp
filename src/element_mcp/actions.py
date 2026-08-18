@@ -369,9 +369,10 @@ class ManagedActionsService:
         ):
             return self._precondition_failed(prepared, "Файл изменился после подготовки")
         body = archive["path"].read_bytes()
-        if len(body) != prepared.precondition["file_size"] or hashlib.sha256(body).hexdigest() != prepared.precondition[
-            "file_sha256"
-        ]:
+        if (
+            len(body) != prepared.precondition["file_size"]
+            or hashlib.sha256(body).hexdigest() != prepared.precondition["file_sha256"]
+        ):
             return self._precondition_failed(prepared, "Файл изменился во время чтения")
         return self._execute_request(
             prepared,
@@ -732,9 +733,7 @@ class ManagedActionsService:
 
     def _purge_locked(self, now: float) -> None:
         self._prepared = {
-            key: value
-            for key, value in self._prepared.items()
-            if value.expires_at + MAX_APPROVAL_TTL_SECONDS > now
+            key: value for key, value in self._prepared.items() if value.expires_at + MAX_APPROVAL_TTL_SECONDS > now
         }
         self._used = {key: expires for key, expires in self._used.items() if expires > now}
 
@@ -802,9 +801,8 @@ def _validate_enabled_policy(policy: ActionPolicy) -> None:
             raise ManagedActionError("Для загрузки сборки нужен allowed_project_ids")
         if not policy.upload_roots:
             raise ManagedActionError("Для загрузки сборки нужен хотя бы один upload_root")
-    if (
-        "update_application" in policy.allowed_actions
-        and (not policy.allowed_application_ids or not policy.allowed_project_ids)
+    if "update_application" in policy.allowed_actions and (
+        not policy.allowed_application_ids or not policy.allowed_project_ids
     ):
         raise ManagedActionError("Для обновления нужны allowed_application_ids и allowed_project_ids")
     if {"start_application", "stop_application"} & policy.allowed_actions and not policy.allowed_application_ids:

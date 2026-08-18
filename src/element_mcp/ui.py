@@ -303,11 +303,7 @@ def register_ui(
             return JSONResponse({"message": "Поле enabled должно быть логическим"}, status_code=400)
         if any(not isinstance(payload.get(key), list) for key in list_fields):
             return JSONResponse({"message": "Списки разрешений должны быть массивами"}, status_code=400)
-        if any(
-            not isinstance(item, str)
-            for key in list_fields
-            for item in payload.get(key, [])
-        ):
+        if any(not isinstance(item, str) for key in list_fields for item in payload.get(key, [])):
             return JSONResponse({"message": "Значения разрешений должны быть строками"}, status_code=400)
         try:
             operation = partial(
