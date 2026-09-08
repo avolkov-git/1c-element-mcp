@@ -812,9 +812,7 @@ def _application_manager_from_instance(root: Path) -> ApplicationManagerConnecti
     if security is None:
         security = {}
     elif not isinstance(security, Mapping):
-        raise RuntimeConfigurationError(
-            "Секция security в application-manager.yml имеет некорректную структуру"
-        )
+        raise RuntimeConfigurationError("Секция security в application-manager.yml имеет некорректную структуру")
     username = security.get("login")
     password = security.get("password")
     if isinstance(username, str) and username.strip() and isinstance(password, str) and password:
