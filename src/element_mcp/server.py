@@ -139,9 +139,12 @@ search_server_logs for bounded exact text search. Server logs and the structured
 different sources. For application events, always supply an explicit timezone-aware start_instant and
 final_instant, keep the range and size as small as practical, and use the returned anchor for pagination. Omit
 application_id only in an active Element IDE session. Application Manager credentials must be configured in the
-local MCP UI or process environment and must never appear in chat or tool arguments. Use trace_operation only for
-exact task/application/trace/request/operation identifiers; preserve source and gaps and never correlate entries
-merely because their text looks similar. All diagnostic output is bounded and redacted.
+Element instance and are discovered automatically from its server.yml and application-manager.yml. For an
+installation that uses an external authentication domain or password hash, an administrator can supply
+ELEMENT_APPLICATION_MANAGER_* in the MCP process environment. Credentials must never appear in chat or tool
+arguments. Use trace_operation only for exact task/application/trace/request/operation identifiers; preserve
+source and gaps and never correlate entries merely because their text looks similar. All diagnostic output is
+bounded and redacted.
 
 For managed Console writes, first call get_managed_actions_status. These actions are disabled by default and
 restricted by exact project/application UUID allowlists configured in the local UI. Always call the matching

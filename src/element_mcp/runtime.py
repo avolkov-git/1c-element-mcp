@@ -17,13 +17,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
+import yaml
+
 from element_mcp.config import ServerSettings
 from element_mcp.console import (
     ConsoleConfigurationError,
     ConsoleService,
-    _protect_secret_for_storage,
     _read_settings_file,
-    _unprotect_windows_secret,
     _write_console_settings,
 )
 
@@ -39,6 +39,7 @@ MAX_EVENT_PROPERTIES = 100
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 EVENT_CONTRACT_VERSION = "9.2.4-6"
 DEFAULT_TIMEOUT_SECONDS = 30.0
+MAX_RUNTIME_CONFIG_BYTES = 256 * 1024
 
 _LOG_NAME = re.compile(
     r"^(?:launcher(?:_\d+)?|server|clients|unclosed_resources|debugger|access|console-executor)"
@@ -112,6 +113,7 @@ class RuntimeConfiguration:
         self.settings = settings
         self.environ = environ if environ is not None else os.environ
         self.path = settings.resolved_runtime_config_path
+        self._discard_obsolete_application_manager_settings()
 
     def instance_root(self) -> tuple[Path | None, str]:
         explicit = self.environ.get("ELEMENT_INSTANCE_ROOT")
@@ -141,25 +143,20 @@ class RuntimeConfiguration:
                 },
                 source="environment",
             )
-        values = self._values().get("application_manager")
-        if not isinstance(values, Mapping) or not _boolean(values.get("enabled", False), "enabled"):
+        root, _ = self.instance_root()
+        if root is None:
             return None
-        return _application_manager_from_values(values, source="runtime_config")
+        return _application_manager_from_instance(_validate_instance_root(root))
 
     def public_configuration(self) -> dict[str, Any]:
         root, source = self.instance_root()
-        values = self._values()
-        manager_values = values.get("application_manager")
-        manager_mapping = manager_values if isinstance(manager_values, Mapping) else {}
-        manager_enabled = _boolean(manager_mapping.get("enabled", False), "enabled")
-        password_present = bool(manager_mapping.get("password") or manager_mapping.get("password_dpapi"))
         try:
             manager = self.application_manager()
-            manager_status = "configured" if manager else "disabled"
+            manager_status = "configured" if manager else "missing"
             manager_message = None
         except RuntimeConfigurationError as error:
             manager = None
-            manager_status = "invalid"
+            manager_status = "unavailable"
             manager_message = str(error)
         return {
             "status": "configured" if root else "missing",
@@ -167,19 +164,12 @@ class RuntimeConfiguration:
             "instance_root_source": source,
             "application_manager": {
                 "status": manager_status,
-                "enabled": manager_enabled,
-                "server": manager.base_url if manager else manager_mapping.get("server"),
-                "username": manager.username if manager else manager_mapping.get("username"),
-                "api_version": manager.api_version if manager else manager_mapping.get("api_version", "auto"),
-                "verify_tls": manager.verify_tls if manager else manager_mapping.get("verify_tls", True),
-                "password_present": password_present,
-                "password_storage": (
-                    "windows_dpapi"
-                    if manager_mapping.get("password_dpapi")
-                    else "restricted_file"
-                    if manager_mapping.get("password")
-                    else None
-                ),
+                "mode": "automatic",
+                "server": manager.base_url if manager else None,
+                "username_present": bool(manager and manager.username),
+                "api_version": manager.api_version if manager else "auto",
+                "verify_tls": manager.verify_tls if manager else True,
+                "source": manager.source if manager else None,
                 "message": manager_message,
             },
         }
@@ -188,54 +178,9 @@ class RuntimeConfiguration:
         self,
         *,
         instance_root: str | Path,
-        application_manager_enabled: bool = False,
-        server: str | None = None,
-        username: str | None = None,
-        password: str | None = None,
-        api_version: Literal["auto", "v1", "v2"] = "auto",
-        verify_tls: bool = True,
     ) -> dict[str, Any]:
         root = _validate_instance_root(Path(instance_root).expanduser().resolve())
-        existing = self._values()
         stored: dict[str, Any] = {"schema_version": 1, "instance_root": str(root)}
-        manager_existing = existing.get("application_manager")
-        manager_existing = dict(manager_existing) if isinstance(manager_existing, Mapping) else {}
-        manager: dict[str, Any] = {"enabled": bool(application_manager_enabled)}
-        if application_manager_enabled:
-            if not isinstance(server, str) or not isinstance(username, str):
-                raise RuntimeConfigurationError("Укажите адрес и имя пользователя Application Manager")
-            normalized_url = _normalize_manager_url(server)
-            normalized_username = username.strip()
-            if not normalized_username:
-                raise RuntimeConfigurationError("Укажите имя пользователя Application Manager")
-            if api_version not in {"auto", "v1", "v2"}:
-                raise RuntimeConfigurationError("Версия Application Manager API должна быть auto, v1 или v2")
-            supplied = password.strip() if isinstance(password, str) else ""
-            same_identity = (
-                manager_existing.get("server") == normalized_url
-                and manager_existing.get("username") == normalized_username
-            )
-            if not supplied and not same_identity:
-                raise RuntimeConfigurationError("Введите пароль для нового подключения Application Manager")
-            manager.update(
-                {
-                    "server": normalized_url,
-                    "username": normalized_username,
-                    "api_version": api_version,
-                    "verify_tls": bool(verify_tls),
-                }
-            )
-            if supplied:
-                key, protected = _protect_secret_for_storage(supplied)
-                manager["password_dpapi" if key.endswith("_dpapi") else "password"] = protected
-            else:
-                for key in ("password_dpapi", "password"):
-                    if key in manager_existing:
-                        manager[key] = manager_existing[key]
-                        break
-                else:
-                    raise RuntimeConfigurationError("Введите пароль Application Manager")
-        stored["application_manager"] = manager
         _write_console_settings(self.path, stored)
         return self.public_configuration()
 
@@ -246,6 +191,20 @@ class RuntimeConfiguration:
             return _read_settings_file(self.path)
         except ConsoleConfigurationError as error:
             raise RuntimeConfigurationError(str(error)) from error
+
+    def _discard_obsolete_application_manager_settings(self) -> None:
+        if not self.path.is_file():
+            return
+        try:
+            values = _read_settings_file(self.path)
+            if "application_manager" not in values:
+                return
+            values.pop("application_manager", None)
+            _write_console_settings(self.path, values)
+        except ConsoleConfigurationError as error:
+            raise RuntimeConfigurationError(
+                f"Не удалось удалить устаревшие настройки Application Manager: {error}"
+            ) from error
 
 
 class ApplicationManagerClient:
@@ -777,8 +736,8 @@ class RuntimeDiagnosticsService:
             raise
         if connection is None:
             raise RuntimeConfigurationError(
-                "Application Manager не настроен. Задайте подключение в локальном UI или через "
-                "ELEMENT_APPLICATION_MANAGER_*"
+                "Application Manager не удалось определить по конфигурации экземпляра. "
+                "Для нестандартной установки задайте ELEMENT_APPLICATION_MANAGER_* в окружении MCP"
             )
         return connection
 
@@ -816,12 +775,6 @@ def _application_manager_from_values(values: Mapping[str, Any], *, source: str) 
     server = values.get("server")
     username = values.get("username")
     password = values.get("password")
-    protected = values.get("password_dpapi")
-    if not isinstance(password, str) and isinstance(protected, str):
-        try:
-            password = _unprotect_windows_secret(protected)
-        except ConsoleConfigurationError as error:
-            raise RuntimeConfigurationError(str(error)) from error
     if (
         not isinstance(server, str)
         or not isinstance(username, str)
@@ -847,6 +800,98 @@ def _application_manager_from_values(values: Mapping[str, Any], *, source: str) 
         ca_bundle=ca_bundle,
         source=source,
     )
+
+
+def _application_manager_from_instance(root: Path) -> ApplicationManagerConnection:
+    app_manager = _read_yaml_mapping(
+        root / "config" / "application-manager.yml",
+        "application-manager",
+        "Конфигурация Application Manager",
+    )
+    security = app_manager.get("security")
+    if security is None:
+        security = {}
+    elif not isinstance(security, Mapping):
+        raise RuntimeConfigurationError(
+            "Секция security в application-manager.yml имеет некорректную структуру"
+        )
+    username = security.get("login")
+    password = security.get("password")
+    if isinstance(username, str) and username.strip() and isinstance(password, str) and password:
+        return ApplicationManagerConnection(
+            base_url=_application_manager_server_url(root),
+            username=username.strip(),
+            password=password,
+            source="instance_config",
+        )
+    if security.get("password-sha256"):
+        raise RuntimeConfigurationError(
+            "Application Manager использует password-sha256: исходный пароль нельзя восстановить из конфигурации. "
+            "Для нестандартной установки задайте ELEMENT_APPLICATION_MANAGER_* в окружении MCP"
+        )
+    if security.get("authentication-domain"):
+        raise RuntimeConfigurationError(
+            "Application Manager использует внешний authentication-domain, поэтому его учётные данные нельзя "
+            "определить автоматически. Задайте ELEMENT_APPLICATION_MANAGER_* в окружении MCP"
+        )
+    raise RuntimeConfigurationError(
+        "Application Manager создаёт временные реквизиты только в памяти сервера, и MCP не может безопасно "
+        "получить их из пустой конфигурации. Для журнала событий задайте ELEMENT_APPLICATION_MANAGER_* "
+        "в окружении MCP"
+    )
+
+
+def _application_manager_server_url(root: Path) -> str:
+    server = _read_yaml_mapping(root / "config" / "server.yml", "server", "Конфигурация сервера")
+    endpoints = server.get("endpoints")
+    if not isinstance(endpoints, list) or not endpoints:
+        raise RuntimeConfigurationError("В server.yml не найден HTTP(S) endpoint экземпляра")
+    errors: list[str] = []
+    for endpoint in endpoints:
+        if not isinstance(endpoint, Mapping):
+            continue
+        protocol = endpoint.get("protocol", "http")
+        address = endpoint.get("address")
+        if protocol not in {"http", "https"} or not isinstance(address, str):
+            continue
+        try:
+            return _endpoint_url(protocol, address)
+        except RuntimeConfigurationError as error:
+            errors.append(str(error))
+    detail = f": {errors[0]}" if errors else ""
+    raise RuntimeConfigurationError(f"В server.yml нет пригодного HTTP(S) endpoint{detail}")
+
+
+def _endpoint_url(protocol: str, address: str) -> str:
+    value = address.strip()
+    if not value or "${" in value:
+        raise RuntimeConfigurationError("endpoint экземпляра не содержит готовый адрес")
+    parsed = urllib.parse.urlsplit(f"//{value}")
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise RuntimeConfigurationError("endpoint экземпляра содержит некорректный порт") from error
+    host = parsed.hostname
+    if not host or port is None or parsed.path:
+        raise RuntimeConfigurationError("endpoint экземпляра должен иметь вид host:port")
+    if host in {"0.0.0.0", "::"}:
+        host = "127.0.0.1" if host == "0.0.0.0" else "::1"
+    authority = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+    return f"{protocol}://{authority}"
+
+
+def _read_yaml_mapping(path: Path, root_key: str, label: str) -> Mapping[str, Any]:
+    if not path.is_file():
+        raise RuntimeConfigurationError(f"{label} не найдена: {path}")
+    try:
+        if path.stat().st_size > MAX_RUNTIME_CONFIG_BYTES:
+            raise RuntimeConfigurationError(f"{label} превышает допустимый размер")
+        value = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, yaml.YAMLError) as error:
+        raise RuntimeConfigurationError(f"Не удалось прочитать {label.lower()}: {error}") from error
+    if not isinstance(value, Mapping) or not isinstance(value.get(root_key), Mapping):
+        raise RuntimeConfigurationError(f"{label} имеет некорректную структуру")
+    return value[root_key]
 
 
 def _normalize_manager_url(value: str) -> str:

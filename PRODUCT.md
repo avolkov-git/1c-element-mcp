@@ -34,6 +34,8 @@ Avoid data-dense dashboards, terminal cosplay, oversized metrics, decorative gra
 - One screen has one primary action.
 - Progressive disclosure keeps configuration out of the common path.
 - Remote Console access is optional, verified before activation, and reversible without re-entering its secret.
+- Runtime setup asks only for the Element instance directory; Application Manager discovery is automatic and
+  never stores a second copy of its credentials.
 - Console writes stay disabled until the operator selects exact actions, project UUIDs, and application UUIDs.
 - A user-selected local source turns checking and applying an update into one deliberate action.
 - Offline and closed-network states stay honest and actionable.

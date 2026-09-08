@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 from pathlib import Path
@@ -49,7 +48,7 @@ def test_ui_reports_running_server_and_protects_mutations(tmp_path: Path) -> Non
 
         status = client.get("/api/status")
         assert status.status_code == 200
-        assert status.json()["server"] == {"state": "running", "version": "0.20.0"}
+        assert status.json()["server"] == {"state": "running", "version": "0.21.0"}
 
         assert client.post("/api/updates/check").status_code == 403
         token = re.search(r'name="element-mcp-token" content="([^"]+)"', page.text).group(1)  # type: ignore[union-attr]
@@ -226,12 +225,19 @@ def test_ui_rejects_unexpected_host_header(tmp_path: Path) -> None:
         assert client.get("/").status_code == 403
 
 
-def test_ui_configures_runtime_without_returning_application_manager_password(tmp_path: Path) -> None:
+def test_ui_configures_runtime_with_automatic_application_manager(tmp_path: Path) -> None:
     instance_root = tmp_path / "instance"
     (instance_root / "config").mkdir(parents=True)
     (instance_root / "logs").mkdir()
-    (instance_root / "config" / "server.yml").write_text("server: {}\n", encoding="utf-8")
+    (instance_root / "config" / "server.yml").write_text(
+        "server:\n  endpoints:\n    - address: 127.0.0.1:9090\n      protocol: http\n",
+        encoding="utf-8",
+    )
     (instance_root / "config" / "logging.yml").write_text("logging: {}\n", encoding="utf-8")
+    (instance_root / "config" / "application-manager.yml").write_text(
+        "application-manager:\n  security:\n    login: manager-user\n    password: manager-password\n",
+        encoding="utf-8",
+    )
     runtime_config = tmp_path / "runtime.json"
     server = create_server(
         ServerSettings(
@@ -246,18 +252,14 @@ def test_ui_configures_runtime_without_returning_application_manager_password(tm
     with TestClient(server.streamable_http_app(), base_url="http://127.0.0.1") as client:
         page = client.get("/")
         token = re.search(r'name="element-mcp-token" content="([^"]+)"', page.text).group(1)  # type: ignore[union-attr]
+        assert "runtime-manager-enabled" not in page.text
+        assert "HTTP-адрес Application Manager" not in page.text
         missing = client.get("/api/runtime/configuration")
         assert missing.status_code == 200
         assert missing.json()["status"] == "missing"
 
         payload = {
             "instance_root": str(instance_root),
-            "application_manager_enabled": True,
-            "server": "https://element.example/manager/api/v2",
-            "username": "manager-user",
-            "password": "manager-password",
-            "api_version": "auto",
-            "verify_tls": True,
         }
         assert client.post("/api/runtime/configuration", json=payload).status_code == 403
         saved = client.post(
@@ -268,10 +270,11 @@ def test_ui_configures_runtime_without_returning_application_manager_password(tm
 
         assert saved.status_code == 200
         assert saved.json()["instance_root"] == str(instance_root.resolve())
-        assert saved.json()["application_manager"]["server"] == "https://element.example"
-        assert saved.json()["application_manager"]["password_present"] is True
+        assert saved.json()["application_manager"]["server"] == "http://127.0.0.1:9090"
+        assert saved.json()["application_manager"]["source"] == "instance_config"
         assert "manager-password" not in saved.text
-        assert "manager-password" in runtime_config.read_text(encoding="utf-8") or os.name == "nt"
+        assert "manager-password" not in runtime_config.read_text(encoding="utf-8")
+        assert "application_manager" not in runtime_config.read_text(encoding="utf-8")
 
 
 def test_ui_accepts_verified_ide_handoff_without_returning_secret(

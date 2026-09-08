@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -53,14 +54,15 @@ def configured_service(
     requester,
 ) -> tuple[RuntimeDiagnosticsService, RuntimeConfiguration]:
     settings = ServerSettings(runtime_config_path=tmp_path / "runtime.json")
-    configuration = RuntimeConfiguration(settings, environ={})
-    configuration.configure(
-        instance_root=instance_root,
-        application_manager_enabled=True,
-        server="https://element.example/manager/api/v2",
-        username="manager-user",
-        password="manager-password",
+    configuration = RuntimeConfiguration(
+        settings,
+        environ={
+            "ELEMENT_APPLICATION_MANAGER_URL": "https://element.example/manager/api/v2",
+            "ELEMENT_APPLICATION_MANAGER_USERNAME": "manager-user",
+            "ELEMENT_APPLICATION_MANAGER_PASSWORD": "manager-password",
+        },
     )
+    configuration.configure(instance_root=instance_root)
     service = RuntimeDiagnosticsService(
         settings,
         StubConsole(),  # type: ignore[arg-type]
@@ -89,26 +91,30 @@ def event_record() -> dict[str, Any]:
     }
 
 
-def test_runtime_configuration_validates_instance_and_never_returns_password(
+def test_runtime_configuration_discovers_application_manager_and_never_persists_password(
     tmp_path: Path,
     instance_root: Path,
 ) -> None:
+    (instance_root / "config" / "server.yml").write_text(
+        "server:\n  endpoints:\n    - address: 0.0.0.0:9090\n      protocol: http\n",
+        encoding="utf-8",
+    )
+    (instance_root / "config" / "application-manager.yml").write_text(
+        "application-manager:\n  security:\n    login: manager-user\n    password: manager-password\n",
+        encoding="utf-8",
+    )
     settings = ServerSettings(runtime_config_path=tmp_path / "runtime.json")
     configuration = RuntimeConfiguration(settings, environ={})
 
-    result = configuration.configure(
-        instance_root=instance_root,
-        application_manager_enabled=True,
-        server="https://element.example/manager/api/v1",
-        username="manager-user",
-        password="manager-password",
-    )
+    result = configuration.configure(instance_root=instance_root)
 
     assert result["instance_root"] == str(instance_root.resolve())
-    assert result["application_manager"]["server"] == "https://element.example"
-    assert result["application_manager"]["password_present"] is True
+    assert result["application_manager"]["server"] == "http://127.0.0.1:9090"
+    assert result["application_manager"]["source"] == "instance_config"
+    assert result["application_manager"]["username_present"] is True
     assert "manager-password" not in str(result)
     assert configuration.application_manager().password == "manager-password"  # type: ignore[union-attr]
+    assert "application_manager" not in json.loads((tmp_path / "runtime.json").read_text(encoding="utf-8"))
     if os.name != "nt":
         assert (tmp_path / "runtime.json").stat().st_mode & 0o777 == 0o600
 
@@ -116,6 +122,61 @@ def test_runtime_configuration_validates_instance_and_never_returns_password(
     missing.mkdir()
     with pytest.raises(RuntimeConfigurationError, match="config/server.yml"):
         configuration.configure(instance_root=missing)
+
+
+def test_runtime_configuration_removes_obsolete_manual_application_manager_settings(
+    tmp_path: Path,
+    instance_root: Path,
+) -> None:
+    (instance_root / "config" / "application-manager.yml").write_text(
+        "application-manager:\n  security:\n",
+        encoding="utf-8",
+    )
+    runtime_path = tmp_path / "runtime.json"
+    runtime_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "instance_root": str(instance_root),
+                "application_manager": {
+                    "enabled": True,
+                    "server": "https://wrong.example",
+                    "username": "wrong-user",
+                    "password": "wrong-password",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    configuration = RuntimeConfiguration(ServerSettings(runtime_config_path=runtime_path), environ={})
+
+    with pytest.raises(RuntimeConfigurationError, match="временные реквизиты"):
+        configuration.application_manager()
+
+    persisted = json.loads(runtime_path.read_text(encoding="utf-8"))
+    assert "application_manager" not in persisted
+    assert "wrong-password" not in runtime_path.read_text(encoding="utf-8")
+
+
+def test_runtime_configuration_reports_non_recoverable_manager_credentials(
+    tmp_path: Path,
+    instance_root: Path,
+) -> None:
+    (instance_root / "config" / "server.yml").write_text(
+        "server:\n  endpoints:\n    - address: '[::]:9443'\n      protocol: https\n",
+        encoding="utf-8",
+    )
+    (instance_root / "config" / "application-manager.yml").write_text(
+        "application-manager:\n  security:\n    login: manager-user\n    password-sha256: digest\n",
+        encoding="utf-8",
+    )
+    configuration = RuntimeConfiguration(
+        ServerSettings(runtime_config_path=tmp_path / "runtime.json"),
+        environ={"ELEMENT_INSTANCE_ROOT": str(instance_root)},
+    )
+
+    with pytest.raises(RuntimeConfigurationError, match="password-sha256"):
+        configuration.application_manager()
 
 
 def test_runtime_logs_are_allowlisted_bounded_and_redacted(tmp_path: Path, instance_root: Path) -> None:

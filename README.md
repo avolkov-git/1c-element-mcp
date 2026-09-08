@@ -2,7 +2,7 @@
 
 MCP-сервер для работы ИИ-агентов с «1С:Предприятие.Элемент». Сервер умеет локально создавать нормализованный корпус из установленного серверного бандла, проверять и подключать его, а затем выполнять гибридный поиск по языку, Management Console и серверной платформе.
 
-Текущая версия: **0.20.0**.
+Текущая версия: **0.21.0**.
 
 ## Что делает сервер
 
@@ -373,11 +373,17 @@ MCP проверяет `config/server.yml` и `config/logging.yml`. Инстру
 данные обозначаются явно.
 
 Журнал событий читается через внутренний Application Manager. Это отдельное подключение с Basic credentials
-экземпляра, а не Client ID/Client Secret внешней Панели управления. Оно включается в локальном UI; пароль на
-Windows защищается DPAPI и ACL и никогда не возвращается браузеру или MCP-клиенту. Также доступны переменные
+экземпляра, а не Client ID/Client Secret внешней Панели управления. Начиная с `0.21.0`, MCP сам получает адрес
+из `config/server.yml`, а постоянные `security.login` и `security.password` — из
+`config/application-manager.yml`. Ручных полей Application Manager в UI нет, его реквизиты не копируются в
+`runtime.json` и не возвращаются браузеру или MCP-клиенту.
+
+Пустая `security`, `password-sha256` и внешний `authentication-domain` не содержат исходного пароля, который
+нужен для HTTP Basic. В таких установках администратор может передать
 `ELEMENT_APPLICATION_MANAGER_URL`, `ELEMENT_APPLICATION_MANAGER_USERNAME`,
 `ELEMENT_APPLICATION_MANAGER_PASSWORD`, `ELEMENT_APPLICATION_MANAGER_API_VERSION` и
-`ELEMENT_APPLICATION_MANAGER_VERIFY_TLS`.
+`ELEMENT_APPLICATION_MANAGER_VERIFY_TLS` в окружении процесса MCP. Секрет не следует передавать агенту или
+писать в чат.
 
 `search_application_events` требует две даты ISO 8601 с часовым поясом, допускает интервал не более 31 дня и
 не более 100 событий. Для Element 4+ используется POST API v2; режим `auto` переходит на старый GET API v1

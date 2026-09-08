@@ -226,67 +226,10 @@
           >
           <p id="runtime-root-help" class="settings-help">
             Это рабочий каталог установленного экземпляра с папками <code>config</code> и <code>logs</code>,
-            а не каталог дистрибутива.
+            а не каталог дистрибутива. Подключение к журналу событий MCP определит автоматически.
           </p>
 
-          <fieldset class="nested-settings">
-            <legend>Журнал событий приложения</legend>
-            <label class="switch-label inline-switch" for="runtime-manager-enabled">
-              <input id="runtime-manager-enabled" name="runtime-manager-enabled" type="checkbox" role="switch">
-              <span>Подключить Application Manager</span>
-            </label>
-            <p class="settings-help">
-              Нужна отдельная внутренняя учётная запись экземпляра. Client ID и Client Secret Панели управления
-              здесь не подходят.
-            </p>
-
-            <div id="runtime-manager-fields" hidden>
-              <label for="runtime-manager-server">HTTP-адрес Application Manager</label>
-              <input
-                id="runtime-manager-server"
-                name="runtime-manager-server"
-                type="url"
-                maxlength="2048"
-                autocomplete="url"
-                spellcheck="false"
-                placeholder="https://element.example"
-                aria-describedby="runtime-manager-help runtime-error"
-              >
-              <p id="runtime-manager-help" class="settings-help">
-                Укажите адрес сервера до <code>/manager/api/v1</code> или <code>/manager/api/v2</code>.
-              </p>
-
-              <label for="runtime-manager-username">Имя пользователя</label>
-              <input
-                id="runtime-manager-username"
-                name="runtime-manager-username"
-                type="text"
-                maxlength="2048"
-                autocomplete="username"
-                spellcheck="false"
-                aria-describedby="runtime-error"
-              >
-
-              <label for="runtime-manager-password">Пароль</label>
-              <input
-                id="runtime-manager-password"
-                name="runtime-manager-password"
-                type="password"
-                maxlength="8192"
-                autocomplete="new-password"
-                spellcheck="false"
-                aria-describedby="runtime-password-help runtime-error"
-              >
-              <p id="runtime-password-help" class="settings-help">
-                На Windows пароль защищается средствами ОС. Он не возвращается в браузер или агенту.
-              </p>
-
-              <label class="check-label" for="runtime-manager-verify-tls">
-                <input id="runtime-manager-verify-tls" name="runtime-manager-verify-tls" type="checkbox" checked>
-                <span>Проверять TLS-сертификат</span>
-              </label>
-            </div>
-          </fieldset>
+          <p id="runtime-manager-status" class="settings-help" role="status" aria-live="polite"></p>
 
           <p id="runtime-feedback" class="source-feedback" role="status" aria-live="polite" hidden></p>
           <p id="runtime-error" class="source-error" role="alert" hidden></p>

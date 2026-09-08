@@ -35,13 +35,7 @@ const runtimeSummary = document.querySelector("#runtime-summary");
 const runtimeToggle = document.querySelector("#runtime-toggle");
 const runtimeSettings = document.querySelector("#runtime-settings");
 const runtimeInstanceRoot = document.querySelector("#runtime-instance-root");
-const runtimeManagerEnabled = document.querySelector("#runtime-manager-enabled");
-const runtimeManagerFields = document.querySelector("#runtime-manager-fields");
-const runtimeManagerServer = document.querySelector("#runtime-manager-server");
-const runtimeManagerUsername = document.querySelector("#runtime-manager-username");
-const runtimeManagerPassword = document.querySelector("#runtime-manager-password");
-const runtimeManagerVerifyTls = document.querySelector("#runtime-manager-verify-tls");
-const runtimePasswordHelp = document.querySelector("#runtime-password-help");
+const runtimeManagerStatus = document.querySelector("#runtime-manager-status");
 const runtimeFeedback = document.querySelector("#runtime-feedback");
 const runtimeError = document.querySelector("#runtime-error");
 const runtimeSave = document.querySelector("#runtime-save");
@@ -66,7 +60,6 @@ let documentationDirty = false;
 let documentationBusy = false;
 let consoleConfiguration = null;
 let consoleBusy = false;
-let runtimeConfiguration = null;
 let runtimeBusy = false;
 let actionsConfiguration = null;
 let actionsBusy = false;
@@ -329,14 +322,7 @@ async function disableConsoleConnection() {
 function showRuntimeError(value, invalidField = null) {
   runtimeError.textContent = value;
   runtimeError.hidden = !value;
-  for (const input of [
-    runtimeInstanceRoot,
-    runtimeManagerServer,
-    runtimeManagerUsername,
-    runtimeManagerPassword,
-  ]) {
-    input.setAttribute("aria-invalid", input === invalidField ? "true" : "false");
-  }
+  runtimeInstanceRoot.setAttribute("aria-invalid", runtimeInstanceRoot === invalidField ? "true" : "false");
 }
 
 function showRuntimeFeedback(value, state = "") {
@@ -347,39 +333,25 @@ function showRuntimeFeedback(value, state = "") {
 
 function setRuntimeBusy(value) {
   runtimeBusy = value;
-  for (const input of [
-    runtimeInstanceRoot,
-    runtimeManagerEnabled,
-    runtimeManagerServer,
-    runtimeManagerUsername,
-    runtimeManagerPassword,
-    runtimeManagerVerifyTls,
-    runtimeSave,
-  ]) {
+  for (const input of [runtimeInstanceRoot, runtimeSave]) {
     input.disabled = value;
   }
   runtimeSave.textContent = value ? "Сохраняем…" : "Сохранить настройки";
 }
 
 function renderRuntimeConfiguration(payload) {
-  runtimeConfiguration = payload;
   const manager = payload.application_manager || {};
   runtimeSummary.textContent =
     payload.status === "configured" ? payload.instance_root : "Не настроен";
   runtimeSummary.title = payload.instance_root || "";
   runtimeInstanceRoot.value = payload.instance_root || "";
-  runtimeManagerEnabled.checked = Boolean(manager.enabled);
-  runtimeManagerFields.hidden = !manager.enabled;
-  runtimeManagerServer.value = manager.server || "";
-  runtimeManagerUsername.value = manager.username || "";
-  runtimeManagerPassword.value = "";
-  runtimeManagerPassword.placeholder = manager.password_present
-    ? "Сохранён — оставьте пустым"
-    : "";
-  runtimePasswordHelp.textContent = manager.password_present
-    ? "Оставьте поле пустым, чтобы использовать сохранённый пароль. Он не возвращается браузеру или агенту."
-    : "На Windows пароль защищается средствами ОС. Он не возвращается браузеру или агенту.";
-  runtimeManagerVerifyTls.checked = manager.verify_tls !== false;
+  if (manager.status === "configured") {
+    runtimeManagerStatus.textContent = "Журнал событий подключён автоматически.";
+  } else if (manager.message) {
+    runtimeManagerStatus.textContent = `Журнал событий пока недоступен: ${manager.message}`;
+  } else {
+    runtimeManagerStatus.textContent = "Журнал событий будет проверен после выбора экземпляра.";
+  }
   runtimeToggle.textContent = runtimeSettings.hidden ? "Настроить" : "Скрыть";
 }
 
@@ -395,20 +367,9 @@ async function loadRuntimeConfiguration() {
 async function saveRuntimeConfiguration() {
   if (runtimeBusy) return;
   showRuntimeError("");
-  const managerEnabled = runtimeManagerEnabled.checked;
-  let invalidField = null;
-  if (!runtimeInstanceRoot.value.trim()) invalidField = runtimeInstanceRoot;
-  else if (managerEnabled && !runtimeManagerServer.value.trim()) invalidField = runtimeManagerServer;
-  else if (managerEnabled && !runtimeManagerUsername.value.trim()) invalidField = runtimeManagerUsername;
-  else if (
-    managerEnabled &&
-    !runtimeManagerPassword.value &&
-    !runtimeConfiguration?.application_manager?.password_present
-  ) {
-    invalidField = runtimeManagerPassword;
-  }
+  const invalidField = runtimeInstanceRoot.value.trim() ? null : runtimeInstanceRoot;
   if (invalidField) {
-    showRuntimeError("Заполните обязательные поля настройки.", invalidField);
+    showRuntimeError("Укажите каталог экземпляра сервера.", invalidField);
     invalidField.focus();
     return;
   }
@@ -420,19 +381,13 @@ async function saveRuntimeConfiguration() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         instance_root: runtimeInstanceRoot.value.trim(),
-        application_manager_enabled: managerEnabled,
-        server: runtimeManagerServer.value.trim() || null,
-        username: runtimeManagerUsername.value.trim() || null,
-        password: runtimeManagerPassword.value || null,
-        api_version: "auto",
-        verify_tls: runtimeManagerVerifyTls.checked,
       }),
     });
     renderRuntimeConfiguration(payload);
     showRuntimeFeedback(
-      managerEnabled
-        ? "Диагностика и доступ к журналу событий настроены."
-        : "Локальная диагностика сервера настроена.",
+      payload.application_manager?.status === "configured"
+        ? "Диагностика и журнал событий готовы."
+        : "Локальная диагностика настроена. Состояние журнала событий показано выше.",
       "success",
     );
   } catch (error) {
@@ -873,18 +828,6 @@ runtimeToggle.addEventListener("click", () => {
     showRuntimeError("");
     runtimeInstanceRoot.focus();
   }
-});
-
-runtimeManagerEnabled.addEventListener("change", () => {
-  runtimeManagerFields.hidden = !runtimeManagerEnabled.checked;
-  showRuntimeError("");
-  showRuntimeFeedback(
-    runtimeManagerEnabled.checked
-      ? "Заполните внутреннее подключение Application Manager и сохраните настройки."
-      : "Журнал событий будет отключён после сохранения; локальные логи останутся доступны.",
-    "pending",
-  );
-  if (runtimeManagerEnabled.checked) runtimeManagerServer.focus();
 });
 
 runtimeSettings.addEventListener("submit", (event) => {

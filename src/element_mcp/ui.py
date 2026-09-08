@@ -250,25 +250,17 @@ def register_ui(
             payload = await request.json()
         except Exception:
             return JSONResponse({"message": "Настройки диагностики должны быть JSON-объектом"}, status_code=400)
-        if not isinstance(payload, dict) or not isinstance(payload.get("application_manager_enabled"), bool):
+        if not isinstance(payload, dict):
             return JSONResponse({"message": "Некорректные настройки диагностики"}, status_code=400)
-        string_fields = ("instance_root", "server", "username", "password", "api_version")
+        string_fields = ("instance_root",)
         if any(payload.get(key) is not None and not isinstance(payload.get(key), str) for key in string_fields):
             return JSONResponse({"message": "Текстовые поля диагностики должны быть строками"}, status_code=400)
-        if "verify_tls" in payload and not isinstance(payload["verify_tls"], bool):
-            return JSONResponse({"message": "Поле verify_tls должно быть логическим"}, status_code=400)
         if max((len(payload.get(key) or "") for key in string_fields), default=0) > 8192:
             return JSONResponse({"message": "Одно из полей настроек слишком длинное"}, status_code=400)
         try:
             operation = partial(
                 runtime.configure,
                 instance_root=payload.get("instance_root", ""),
-                application_manager_enabled=payload["application_manager_enabled"],
-                server=payload.get("server"),
-                username=payload.get("username"),
-                password=payload.get("password"),
-                api_version=payload.get("api_version", "auto"),
-                verify_tls=payload.get("verify_tls", True),
             )
             result = await anyio.to_thread.run_sync(operation)
         except RuntimeConfigurationError as error:
