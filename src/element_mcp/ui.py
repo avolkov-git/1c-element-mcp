@@ -132,6 +132,16 @@ def register_ui(
             return JSONResponse({"message": str(error)}, status_code=409)
         return JSONResponse(result, status_code=202, headers={"Cache-Control": "no-store"})
 
+    @server.custom_route("/api/server/restart", methods=["POST"], include_in_schema=False)
+    async def restart_server(request: Request) -> Response:
+        if not mutation_allowed(request):
+            return JSONResponse({"message": "Недопустимый локальный запрос"}, status_code=403)
+        try:
+            result = await anyio.to_thread.run_sync(updates.request_restart)
+        except UpdateError as error:
+            return JSONResponse({"message": str(error)}, status_code=409)
+        return JSONResponse(result, status_code=202, headers={"Cache-Control": "no-store"})
+
     @server.custom_route("/api/documentation", methods=["GET"], include_in_schema=False)
     async def documentation_status(request: Request) -> Response:
         if not host_allowed(request):

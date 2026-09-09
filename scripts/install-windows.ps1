@@ -256,7 +256,7 @@ if ($RegisterStartupTask) {
         -StartWhenAvailable
     Register-ScheduledTask `
         -TaskName $UpdaterTaskName `
-        -Description "Updates 1C Element MCP from Git and restarts the server task" `
+        -Description "Updates or restarts 1C Element MCP using the server task" `
         -Action $UpdaterAction `
         -Principal $Principal `
         -Settings $UpdaterSettings `

@@ -38,6 +38,7 @@ Avoid data-dense dashboards, terminal cosplay, oversized metrics, decorative gra
   never stores a second copy of its credentials.
 - Console writes stay disabled until the operator selects exact actions, project UUIDs, and application UUIDs.
 - A user-selected local source turns checking and applying an update into one deliberate action.
+- A secondary restart action reuses the Windows service boundary and never implies a code update.
 - Offline and closed-network states stay honest and actionable.
 - Familiar controls and immediate feedback build trust.
 

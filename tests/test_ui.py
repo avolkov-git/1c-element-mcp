@@ -48,10 +48,16 @@ def test_ui_reports_running_server_and_protects_mutations(tmp_path: Path) -> Non
 
         status = client.get("/api/status")
         assert status.status_code == 200
-        assert status.json()["server"] == {"state": "running", "version": "0.21.1"}
+        assert status.json()["server"] == {"state": "running", "version": "0.22.0"}
+        assert status.json()["restart"]["can_restart"] is False
 
         assert client.post("/api/updates/check").status_code == 403
+        assert client.post("/api/server/restart").status_code == 403
+        assert "Перезапустить сервер" in page.text
         token = re.search(r'name="element-mcp-token" content="([^"]+)"', page.text).group(1)  # type: ignore[union-attr]
+        restart = client.post("/api/server/restart", headers={"X-Element-MCP-Token": token})
+        assert restart.status_code == 409
+        assert "Windows Server" in restart.json()["message"]
         check = client.post("/api/updates/check", headers={"X-Element-MCP-Token": token})
         assert check.status_code == 200
         assert check.json()["updates"]["state"] == "unavailable"

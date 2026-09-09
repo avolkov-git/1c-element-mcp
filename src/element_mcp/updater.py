@@ -10,7 +10,14 @@ from pathlib import Path
 from packaging.version import Version
 
 from element_mcp.config import ConfigurationError, ConfigurationStore, discover_update_source_path
-from element_mcp.updates import GitRepository, UpdateError, utc_now, write_json_atomic
+from element_mcp.updates import (
+    GitRepository,
+    UpdateError,
+    consume_restart_request,
+    restart_status_path,
+    utc_now,
+    write_json_atomic,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -48,6 +55,29 @@ def _install(repository_path: Path) -> None:
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip() or f"код {result.returncode}"
         raise UpdateError(f"pip install: {detail}")
+
+
+def perform_restart(*, server_task_name: str, status_path: Path, request_id: str) -> dict[str, object]:
+    def record(state: str, message: str) -> dict[str, object]:
+        value: dict[str, object] = {
+            "state": state,
+            "message": message,
+            "request_id": request_id,
+            "updated_at": utc_now(),
+        }
+        write_json_atomic(status_path, value)
+        return value
+
+    try:
+        record("restarting", "MCP перезапускается")
+        # Give the HTTP 202 response time to reach the browser before stopping the server task.
+        time.sleep(1.5)
+        _task("End", server_task_name, check=False)
+        time.sleep(1)
+        _task("Run", server_task_name, check=True)
+        return record("success", "MCP успешно перезапущен")
+    except Exception as error:
+        return record("error", f"Не удалось перезапустить MCP: {error}")
 
 
 def perform_update(
@@ -129,6 +159,15 @@ def perform_update(
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    update_status_path = args.status_path.expanduser().resolve()
+    restart_request = consume_restart_request(update_status_path)
+    if restart_request is not None:
+        result = perform_restart(
+            server_task_name=args.server_task_name,
+            status_path=restart_status_path(update_status_path),
+            request_id=restart_request["request_id"],
+        )
+        return 0 if result["state"] == "success" else 1
     try:
         source_path = discover_update_source_path(
             args.source_path,
@@ -136,7 +175,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     except ConfigurationError as error:
         write_json_atomic(
-            args.status_path.expanduser().resolve(),
+            update_status_path,
             {
                 "state": "error",
                 "message": f"Обновление не выполнено: {error}",
@@ -149,7 +188,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         source_path=source_path,
         revision=args.revision,
         server_task_name=args.server_task_name,
-        status_path=args.status_path.expanduser().resolve(),
+        status_path=update_status_path,
     )
     return 0 if result["state"] in {"current", "success"} else 1
 

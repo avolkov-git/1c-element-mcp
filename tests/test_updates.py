@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from element_mcp import updater
+from element_mcp import updater, updates
 from element_mcp.config import ConfigurationStore, ServerSettings
 from element_mcp.updates import UpdateError, UpdateService, safe_error_detail, safe_source_label
 
@@ -33,7 +33,7 @@ def make_update_repositories(tmp_path: Path) -> tuple[Path, Path, str]:
     git(source, "init", "-b", "master")
     git(source, "config", "user.email", "test@example.invalid")
     git(source, "config", "user.name", "Test")
-    write_version(source, "0.21.1")
+    write_version(source, "0.22.0")
     git(source, "add", "pyproject.toml")
     git(source, "commit", "-m", "initial")
 
@@ -41,7 +41,7 @@ def make_update_repositories(tmp_path: Path) -> tuple[Path, Path, str]:
     subprocess.run(["git", "clone", "--quiet", str(source), str(target)], check=True)
     previous_commit = git(target, "rev-parse", "HEAD")
 
-    write_version(source, "0.21.2")
+    write_version(source, "0.22.1")
     git(source, "add", "pyproject.toml")
     git(source, "commit", "-m", "update")
     return source, target, previous_commit
@@ -60,7 +60,7 @@ def test_local_source_reports_available_update(tmp_path: Path) -> None:
     status = service.check()
 
     assert status["updates"]["state"] == "available"
-    assert status["updates"]["available_version"] == "0.21.2"
+    assert status["updates"]["available_version"] == "0.22.1"
     assert status["updates"]["source"]["kind"] == "local"
 
 
@@ -122,6 +122,99 @@ def test_closed_network_failure_does_not_report_server_failure(tmp_path: Path) -
     assert status["updates"]["message"] == "Проверка обновлений недоступна. MCP продолжает работать."
 
 
+def test_restart_request_queues_existing_windows_updater_task(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = UpdateService(
+        ServerSettings(
+            data_path=tmp_path / "data",
+            update_task_name="1C Element MCP Updater",
+        )
+    )
+    launched: list[str] = []
+    monkeypatch.setattr(updates, "windows_task_scheduler_available", lambda: True)
+    monkeypatch.setattr(updates, "run_scheduled_task", launched.append)
+
+    result = service.request_restart()
+
+    assert result["accepted"] is True
+    assert result["restart"]["state"] == "queued"
+    assert result["restart_request_id"] == result["restart"]["request_id"]
+    assert launched == ["1C Element MCP Updater"]
+    request = updates.read_json(service.control_path)
+    assert request == {
+        "action": "restart",
+        "request_id": result["restart_request_id"],
+        "requested_at": result["restart"]["updated_at"],
+    }
+
+
+def test_updater_restarts_server_task_without_updating_repository(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, bool]] = []
+    monkeypatch.setattr(
+        updater,
+        "_task",
+        lambda action, name, *, check: calls.append((action, name, check)),
+    )
+    monkeypatch.setattr(updater.time, "sleep", lambda *_args: None)
+    status_path = tmp_path / "restart-status.json"
+
+    result = updater.perform_restart(
+        server_task_name="1C Element MCP",
+        status_path=status_path,
+        request_id="restart-request",
+    )
+
+    assert result["state"] == "success"
+    assert calls == [
+        ("End", "1C Element MCP", False),
+        ("Run", "1C Element MCP", True),
+    ]
+    assert updates.read_json(status_path)["request_id"] == "restart-request"  # type: ignore[index]
+
+
+def test_updater_consumes_restart_request_before_update(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    update_status_path = tmp_path / "data" / "update-status.json"
+    updates.write_json_atomic(
+        updates.server_control_path(update_status_path),
+        {"action": "restart", "request_id": "request-1", "requested_at": updates.utc_now()},
+    )
+    captured: dict[str, object] = {}
+
+    def restart(**arguments: object) -> dict[str, object]:
+        captured.update(arguments)
+        return {"state": "success"}
+
+    monkeypatch.setattr(updater, "perform_restart", restart)
+    result = updater.main(
+        [
+            "--repository-path",
+            str(tmp_path / "repository"),
+            "--config-path",
+            str(tmp_path / "config.json"),
+            "--server-task-name",
+            "1C Element MCP",
+            "--status-path",
+            str(update_status_path),
+        ]
+    )
+
+    assert result == 0
+    assert captured == {
+        "server_task_name": "1C Element MCP",
+        "status_path": updates.restart_status_path(update_status_path),
+        "request_id": "request-1",
+    }
+    assert not updates.server_control_path(update_status_path).exists()
+
+
 def test_updater_fast_forwards_managed_repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     source, target, _ = make_update_repositories(tmp_path)
     monkeypatch.setattr(updater, "_task", lambda *args, **kwargs: None)
@@ -137,7 +230,7 @@ def test_updater_fast_forwards_managed_repository(tmp_path: Path, monkeypatch: p
     )
 
     assert result["state"] == "success"
-    assert git(target, "show", "HEAD:pyproject.toml").endswith('version = "0.21.2"')
+    assert git(target, "show", "HEAD:pyproject.toml").endswith('version = "0.22.1"')
 
 
 def test_updater_rolls_back_when_installation_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

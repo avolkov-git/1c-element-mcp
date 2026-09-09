@@ -23,6 +23,10 @@ class UpdateError(RuntimeError):
     pass
 
 
+ACTIVE_UPDATE_STATES = frozenset({"queued", "checking", "applying"})
+ACTIVE_RESTART_STATES = frozenset({"queued", "restarting"})
+
+
 @dataclass(frozen=True, slots=True)
 class UpdateCandidate:
     commit: str
@@ -48,6 +52,49 @@ def read_json(path: Path) -> dict[str, Any] | None:
     except (OSError, json.JSONDecodeError):
         return None
     return value if isinstance(value, dict) else None
+
+
+def restart_status_path(update_status_path: Path) -> Path:
+    return update_status_path.with_name("restart-status.json")
+
+
+def server_control_path(update_status_path: Path) -> Path:
+    return update_status_path.with_name("server-control.json")
+
+
+def consume_restart_request(update_status_path: Path) -> dict[str, Any] | None:
+    path = server_control_path(update_status_path)
+    request = read_json(path)
+    if request is None:
+        return None
+    try:
+        path.unlink()
+    except OSError:
+        return None
+    request_id = request.get("request_id")
+    if request.get("action") != "restart" or not isinstance(request_id, str) or not request_id:
+        return None
+    return request
+
+
+def windows_task_scheduler_available() -> bool:
+    return os.name == "nt"
+
+
+def run_scheduled_task(name: str) -> None:
+    try:
+        result = subprocess.run(
+            ["schtasks.exe", "/Run", "/TN", name],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise UpdateError(f"Не удалось запустить системное задание: {error}") from error
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip() or f"код {result.returncode}"
+        raise UpdateError(f"Не удалось запустить системное задание: {detail}")
 
 
 def safe_source_label(value: str) -> str:
@@ -144,8 +191,11 @@ class UpdateService:
         self.default_source_path = settings.resolved_update_source_path
         self.configuration = ConfigurationStore(settings.resolved_config_path)
         self.status_path = settings.resolved_data_path / "update-status.json"
+        self.restart_status_path = restart_status_path(self.status_path)
+        self.control_path = server_control_path(self.status_path)
         self.csrf_token = secrets.token_urlsafe(32)
         self._lock = threading.Lock()
+        self._operation_lock = threading.Lock()
         self._check: dict[str, Any] = {
             "state": "idle",
             "message": "Проверка обновлений ещё не выполнялась",
@@ -211,14 +261,19 @@ class UpdateService:
     def status(self) -> dict[str, Any]:
         persisted = read_json(self.status_path)
         update_state = persisted or {"state": "idle", "message": None, "updated_at": None}
+        restart_state = read_json(self.restart_status_path) or {
+            "state": "idle",
+            "message": None,
+            "updated_at": None,
+        }
+        task_available = bool(self.settings.update_task_name and windows_task_scheduler_available())
         return {
             "server": {"state": "running", "version": __version__},
+            "restart": {**restart_state, "can_restart": task_available},
             "updates": {
                 **self._check,
                 "source": self.source(),
-                "can_apply": bool(
-                    self._check.get("state") == "available" and self.settings.update_task_name and os.name == "nt"
-                ),
+                "can_apply": bool(self._check.get("state") == "available" and task_available),
                 "apply": update_state,
             },
         }
@@ -267,32 +322,78 @@ class UpdateService:
         return self.status()
 
     def apply(self) -> dict[str, Any]:
-        status = self.check()
-        updates = status["updates"]
-        if updates["state"] != "available":
-            raise UpdateError(updates["message"])
-        if os.name != "nt" or not self.settings.update_task_name:
-            raise UpdateError("Автоматическое применение обновлений настроено только установщиком Windows Server")
-
-        queued = {
-            "state": "queued",
-            "message": f"Обновление до {updates['available_version']} поставлено в очередь",
-            "from_version": __version__,
-            "to_version": updates["available_version"],
-            "updated_at": utc_now(),
-        }
-        write_json_atomic(self.status_path, queued)
+        if not self._operation_lock.acquire(blocking=False):
+            raise UpdateError("Дождитесь завершения текущей операции")
         try:
-            result = subprocess.run(
-                ["schtasks.exe", "/Run", "/TN", self.settings.update_task_name],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=10,
+            restart_state = read_json(self.restart_status_path) or {}
+            if restart_state.get("state") in ACTIVE_RESTART_STATES:
+                raise UpdateError("Сначала дождитесь завершения перезапуска")
+            status = self.check()
+            updates = status["updates"]
+            if updates["state"] != "available":
+                raise UpdateError(updates["message"])
+            if not windows_task_scheduler_available() or not self.settings.update_task_name:
+                raise UpdateError("Автоматическое применение обновлений настроено только установщиком Windows Server")
+
+            queued = {
+                "state": "queued",
+                "message": f"Обновление до {updates['available_version']} поставлено в очередь",
+                "from_version": __version__,
+                "to_version": updates["available_version"],
+                "updated_at": utc_now(),
+            }
+            write_json_atomic(self.status_path, queued)
+            run_scheduled_task(self.settings.update_task_name)
+            return {**self.status(), "accepted": True}
+        finally:
+            self._operation_lock.release()
+
+    def request_restart(self) -> dict[str, Any]:
+        if not windows_task_scheduler_available() or not self.settings.update_task_name:
+            raise UpdateError("Перезапуск из интерфейса доступен только для установки Windows Server")
+        if not self._operation_lock.acquire(blocking=False):
+            raise UpdateError("Дождитесь завершения текущей операции")
+
+        request_id = secrets.token_urlsafe(18)
+        try:
+            if self._check.get("state") == "checking":
+                raise UpdateError("Сначала дождитесь завершения проверки обновлений")
+            update_state = read_json(self.status_path) or {}
+            if update_state.get("state") in ACTIVE_UPDATE_STATES:
+                raise UpdateError("Сначала дождитесь завершения обновления")
+            restart_state = read_json(self.restart_status_path) or {}
+            if restart_state.get("state") in ACTIVE_RESTART_STATES:
+                raise UpdateError("Перезапуск уже выполняется")
+
+            queued = {
+                "state": "queued",
+                "message": "Перезапуск MCP поставлен в очередь",
+                "request_id": request_id,
+                "updated_at": utc_now(),
+            }
+            write_json_atomic(self.restart_status_path, queued)
+            write_json_atomic(
+                self.control_path,
+                {
+                    "action": "restart",
+                    "request_id": request_id,
+                    "requested_at": queued["updated_at"],
+                },
             )
-        except (OSError, subprocess.TimeoutExpired) as error:
-            raise UpdateError(f"Не удалось запустить задание обновления: {error}") from error
-        if result.returncode != 0:
-            detail = (result.stderr or result.stdout).strip() or f"код {result.returncode}"
-            raise UpdateError(f"Не удалось запустить задание обновления: {detail}")
-        return {**self.status(), "accepted": True}
+            try:
+                run_scheduled_task(self.settings.update_task_name)
+            except UpdateError as error:
+                self.control_path.unlink(missing_ok=True)
+                write_json_atomic(
+                    self.restart_status_path,
+                    {
+                        "state": "error",
+                        "message": str(error),
+                        "request_id": request_id,
+                        "updated_at": utc_now(),
+                    },
+                )
+                raise
+        finally:
+            self._operation_lock.release()
+        return {**self.status(), "accepted": True, "restart_request_id": request_id}

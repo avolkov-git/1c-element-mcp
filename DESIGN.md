@@ -36,6 +36,9 @@ One responsive column capped near 560px. A single bordered surface groups the st
 - Managed actions editor: a separate disclosure with a master switch, four plain-language operation checkboxes, exact project/application UUID lists, and upload roots. Disabling takes effect immediately. Enabling requires a deliberate save after all required restrictions pass validation.
 - Update state: an `aria-live` message with current, available, checking, applying, or unavailable copy.
 - Primary button: one 48px control whose label changes with context. It has hover, focus-visible, active, disabled, loading, success, and error states.
+- Restart action: a quieter full-width secondary button directly below the primary update action. It disables
+  during updates and restarts, reports interruption and recovery through a live region, and reloads the page to
+  renew its local CSRF token after the MCP process returns.
 
 ## Motion
 

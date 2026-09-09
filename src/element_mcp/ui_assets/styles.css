@@ -505,6 +505,55 @@ h1 {
   opacity: 0.5;
 }
 
+#restart-action {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 8px;
+  padding: 10px 18px;
+  touch-action: manipulation;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  color: var(--ink);
+  background: transparent;
+  font-weight: 650;
+  transition: border-color 160ms ease, background-color 160ms ease, transform 120ms var(--ease-out), opacity 160ms ease;
+}
+
+#restart-action:hover:not(:disabled) {
+  border-color: color-mix(in oklch, var(--ink), transparent 60%);
+  background: color-mix(in oklch, var(--ink), transparent 94%);
+}
+
+#restart-action:focus-visible {
+  outline: 3px solid color-mix(in oklch, var(--focus), transparent 35%);
+  outline-offset: 3px;
+}
+
+#restart-action:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+#restart-action:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.restart-message {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.875rem;
+  text-wrap: pretty;
+}
+
+.restart-message[data-state="success"] {
+  color: var(--success);
+}
+
+.restart-message[data-state="error"] {
+  color: var(--danger);
+}
+
 .endpoint {
   margin-top: 14px;
   text-align: center;
@@ -596,7 +645,8 @@ h1 {
     transition-duration: 0.01ms !important;
   }
 
-  #update-action:active:not(:disabled) {
+  #update-action:active:not(:disabled),
+  #restart-action:active:not(:disabled) {
     transform: none;
   }
 

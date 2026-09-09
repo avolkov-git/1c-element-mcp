@@ -5,6 +5,8 @@ const title = document.querySelector("#update-title");
 const message = document.querySelector("#update-message");
 const action = document.querySelector("#update-action");
 const actionLabel = action.querySelector(".button-label");
+const restartAction = document.querySelector("#restart-action");
+const restartMessage = document.querySelector("#restart-message");
 const sourceToggle = document.querySelector("#source-toggle");
 const sourceSettings = document.querySelector("#source-settings");
 const sourceInput = document.querySelector("#source-path");
@@ -63,6 +65,7 @@ let consoleBusy = false;
 let runtimeBusy = false;
 let actionsConfiguration = null;
 let actionsBusy = false;
+let restartBusy = false;
 
 function sleep(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
@@ -555,6 +558,34 @@ function markSourceDirty() {
   action.dataset.action = "check";
 }
 
+function showRestartMessage(value, state = "") {
+  restartMessage.textContent = value;
+  restartMessage.hidden = !value;
+  restartMessage.dataset.state = state;
+}
+
+function renderRestart(payload, updateInProgress) {
+  const restart = payload.restart || {};
+  const restartInProgress = ["queued", "restarting"].includes(restart.state);
+  const restartUpdatedAt = Date.parse(restart.updated_at || "");
+  const recentlyRestarted = Number.isFinite(restartUpdatedAt) && Date.now() - restartUpdatedAt < 60_000;
+  restartAction.textContent = restartInProgress ? "Перезапускаем…" : "Перезапустить сервер";
+  restartAction.disabled = restartBusy || updateInProgress || restartInProgress || !restart.can_restart;
+
+  if (restartInProgress) {
+    showRestartMessage(restart.message || "MCP перезапускается…");
+  } else if (restart.state === "error") {
+    showRestartMessage(restart.message || "Не удалось перезапустить MCP.", "error");
+  } else if (restart.state === "success" && recentlyRestarted) {
+    showRestartMessage(restart.message || "MCP успешно перезапущен.", "success");
+  } else if (!restart.can_restart) {
+    showRestartMessage("Перезапуск из интерфейса доступен для установки Windows Server.");
+  } else {
+    showRestartMessage("");
+  }
+  return restartInProgress;
+}
+
 function render(payload) {
   latestStatus = payload;
   initialVersion ||= payload.server.version;
@@ -564,7 +595,9 @@ function render(payload) {
   setSourceEditor(payload.updates.source);
 
   const applyState = payload.updates.apply?.state;
-  if (["queued", "checking", "applying"].includes(applyState)) {
+  const updateInProgress = ["queued", "checking", "applying"].includes(applyState);
+  const restartInProgress = renderRestart(payload, updateInProgress);
+  if (updateInProgress) {
     title.textContent = "Устанавливаем обновление";
     message.textContent = payload.updates.apply.message || "Сервер скоро перезапустится.";
     actionLabel.textContent = "Обновляем…";
@@ -606,6 +639,7 @@ function render(payload) {
     action.disabled = false;
     action.dataset.action = "check";
   }
+  if (restartInProgress) action.disabled = true;
 }
 
 async function saveSourceIfNeeded() {
@@ -694,25 +728,44 @@ async function checkUpdates(applyLocalUpdate = false) {
   }
 }
 
-async function waitForRestart() {
+async function waitForRestart(restartRequestId = null) {
   const deadline = Date.now() + 180_000;
   await sleep(1_500);
   while (Date.now() < deadline) {
+    let payload;
     try {
-      const payload = await api(`/api/status?t=${Date.now()}`);
-      if (payload.server.version !== initialVersion || payload.updates.apply?.state === "success") {
-        window.location.reload();
-        return;
-      }
-      render(payload);
+      payload = await api(`/api/status?t=${Date.now()}`);
     } catch {
-      title.textContent = "Перезапускаем MCP";
-      message.textContent = "Страница подключится снова автоматически.";
+      if (restartRequestId) {
+        showRestartMessage("MCP перезапускается. Страница подключится снова автоматически.");
+      } else {
+        title.textContent = "Перезапускаем MCP";
+        message.textContent = "Страница подключится снова автоматически.";
+      }
+      await sleep(1_500);
+      continue;
     }
+
+    const requestedRestart =
+      restartRequestId && payload.restart?.request_id === restartRequestId ? payload.restart : null;
+    if (requestedRestart?.state === "error") throw new Error(requestedRestart.message);
+    if (
+      requestedRestart?.state === "success" ||
+      (!restartRequestId &&
+        (payload.server.version !== initialVersion || payload.updates.apply?.state === "success"))
+    ) {
+      window.location.reload();
+      return;
+    }
+    render(payload);
     await sleep(1_500);
   }
-  title.textContent = "Перезапуск занимает больше времени";
-  message.textContent = "Обновите страницу или проверьте журнал службы.";
+  if (restartRequestId) {
+    throw new Error("Перезапуск занимает больше времени. Обновите страницу или проверьте журнал службы.");
+  } else {
+    title.textContent = "Перезапуск занимает больше времени";
+    message.textContent = "Обновите страницу или проверьте журнал службы.";
+  }
 }
 
 async function applyUpdate() {
@@ -730,10 +783,32 @@ async function applyUpdate() {
   }
 }
 
+async function restartServer() {
+  if (restartBusy) return;
+  restartBusy = true;
+  restartAction.disabled = true;
+  restartAction.textContent = "Запускаем перезапуск…";
+  action.disabled = true;
+  showRestartMessage("Текущие подключения MCP будут кратко прерваны.");
+  try {
+    const payload = await api("/api/server/restart", { method: "POST" });
+    render(payload);
+    await waitForRestart(payload.restart_request_id);
+  } catch (error) {
+    restartBusy = false;
+    showRestartMessage(error.message, "error");
+    restartAction.textContent = "Перезапустить сервер";
+    restartAction.disabled = !latestStatus?.restart?.can_restart;
+    action.disabled = false;
+  }
+}
+
 action.addEventListener("click", () => {
   if (action.dataset.action === "apply") applyUpdate();
   else checkUpdates(true);
 });
+
+restartAction.addEventListener("click", restartServer);
 
 sourceToggle.addEventListener("click", () => {
   const open = sourceSettings.hidden;
