@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-20T23:14:07.208Z",
+  "title": "Design System: Element MCP",
+  "extensions": {
+    "shadows": [
+      {
+        "name": "toast",
+        "value": "0 6px 24px var(--shadow)",
+        "purpose": "Transient operation feedback."
+      },
+      {
+        "name": "tooltip",
+        "value": "0 4px 16px var(--shadow)",
+        "purpose": "Header and password icon labels."
+      }
+    ],
+    "motion": [
+      {
+        "name": "switch",
+        "value": "transform 120ms ease",
+        "purpose": "Switch thumb state change."
+      },
+      {
+        "name": "busy",
+        "value": "1s linear infinite",
+        "purpose": "Busy icon rotation; disabled by reduced motion."
+      },
+      {
+        "name": "toast-lifetime",
+        "value": "3000ms",
+        "purpose": "Lifetime of each displayed toast."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "stacked-navigation",
+        "value": "700px"
+      },
+      {
+        "name": "compact-padding",
+        "value": "420px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Form save or connect action.",
+      "html": "<button class=\"ds-primary\">Сохранить</button>",
+      "css": ".ds-primary{background:var(--primary,#4ba3f7);color:var(--primary-foreground,#101a24);font:500 12px/1.6 \"JetBrains Mono\",monospace;border:1px solid var(--primary,#4ba3f7);border-radius:0;min-height:40px;padding:8px 18px;cursor:pointer}.ds-primary:hover{background:#70b7fa;border-color:#70b7fa}.ds-primary:focus-visible{outline:2px solid var(--primary,#4ba3f7);outline-offset:4px}.ds-primary:disabled{opacity:.45;cursor:not-allowed}"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Secondary save or check action.",
+      "html": "<button class=\"ds-secondary\">Проверить обновления</button>",
+      "css": ".ds-secondary{background:transparent;color:var(--foreground,#171717);font:500 12px/1.6 \"JetBrains Mono\",monospace;border:1px solid var(--border,#e5e5e5);border-radius:0;min-height:40px;padding:8px 18px;cursor:pointer}.ds-secondary:hover{background:var(--hover,#f5f5f5)}.ds-secondary:focus-visible{outline:2px solid var(--primary,#4ba3f7);outline-offset:4px}"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Underlined configuration field.",
+      "html": "<label class=\"ds-field\">Каталог документации<input placeholder=\"/srv/element/docs\"></label>",
+      "css": ".ds-field{display:grid;gap:8px;font:500 12px/1.6 \"JetBrains Mono\",monospace;color:var(--foreground,#171717)}.ds-field input{font:400 13px/1.6 \"JetBrains Mono\",monospace;background:transparent;color:inherit;border:0;border-bottom:1px solid var(--border,#e5e5e5);border-radius:0;min-height:40px;padding:8px 0;caret-color:var(--primary,#4ba3f7)}.ds-field input::placeholder{color:var(--muted,#666)}.ds-field input:focus-visible{outline:2px solid var(--primary,#4ba3f7);outline-offset:4px}"
+    },
+    {
+      "name": "Navigation Item",
+      "kind": "nav",
+      "refersTo": "navigation",
+      "description": "Current section with a narrow blue selection stripe.",
+      "html": "<button class=\"ds-nav\" aria-current=\"page\">Подключения</button>",
+      "css": ".ds-nav{background:transparent;color:var(--muted,#666);font:400 12px/1.6 \"JetBrains Mono\",monospace;text-align:left;border:0;border-radius:0;padding:9px 12px;min-height:42px;cursor:pointer}.ds-nav[aria-current=page],.ds-nav:hover{background:var(--hover,#f5f5f5);color:var(--foreground,#171717)}.ds-nav[aria-current=page]{box-shadow:inset 2px 0 var(--primary,#4ba3f7)}.ds-nav:focus-visible{outline:2px solid var(--primary,#4ba3f7);outline-offset:4px}"
+    },
+    {
+      "name": "Toast Surface",
+      "kind": "custom",
+      "refersTo": "toast",
+      "description": "Operation feedback; production adds semantic icon and close button.",
+      "html": "<div class=\"ds-toast\" role=\"status\">Настройки сохранены</div>",
+      "css": ".ds-toast{background:var(--toast-surface,#fff);color:var(--foreground,#171717);font:400 12px/1.6 \"JetBrains Mono\",monospace;border:1px solid var(--border,#e5e5e5);border-radius:0;padding:14px 12px 14px 16px;box-shadow:0 6px 24px var(--shadow,#00000014);overflow-wrap:anywhere}"
+    }
+  ]
+}

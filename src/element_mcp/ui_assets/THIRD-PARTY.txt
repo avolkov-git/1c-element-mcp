@@ -1,0 +1,12 @@
+JetBrains Mono 2.304
+https://github.com/JetBrains/JetBrainsMono/tree/v2.304
+Regular, Medium and SemiBold webfonts. SIL Open Font License 1.1.
+License: jetbrains-mono-OFL.txt
+
+Phosphor Icons (@phosphor-icons/react 2.1.10)
+https://github.com/phosphor-icons/react
+Regular icon paths bundled as an SVG symbol sprite. MIT License.
+License: phosphor-LICENSE.txt
+
+These assets are served locally. The interface does not load fonts, icons,
+scripts or styles from a CDN. React is not a runtime dependency of this UI.

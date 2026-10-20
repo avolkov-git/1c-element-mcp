@@ -57,6 +57,7 @@ def make_update_repositories(
         ("0.22.1", "0.23.0"),
         ("0.23.0", "0.23.1"),
         ("0.23.1", "0.23.2"),
+        ("0.23.2", "0.23.3"),
     ],
 )
 def test_local_source_reports_available_update(
@@ -79,7 +80,7 @@ def test_local_source_reports_available_update(
     assert status["updates"]["source"]["kind"] == "local"
 
 
-@pytest.mark.parametrize("release_version", ["0.22.1", "0.23.0", "0.23.1", "0.23.2"])
+@pytest.mark.parametrize("release_version", ["0.22.1", "0.23.0", "0.23.1", "0.23.2", "0.23.3"])
 def test_local_source_reports_current_for_installed_release(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, release_version: str
 ) -> None:

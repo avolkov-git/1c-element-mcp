@@ -40,15 +40,17 @@ def test_ui_reports_running_server_and_protects_mutations(tmp_path: Path) -> Non
     with TestClient(server.streamable_http_app(), base_url="http://127.0.0.1") as client:
         page = client.get("/")
         assert page.status_code == 200
-        assert "MCP работает" in page.text
-        assert "Каталог нормализованной документации" in page.text
-        assert "Диагностика сервера Element" in page.text
-        assert "Управляемые действия" in page.text
+        assert "Element MCP" in page.text
+        assert "Каталог документации" in page.text
+        assert "Сервер Element" in page.text
+        assert "Действия агента" in page.text
+        assert 'id="theme-action"' in page.text
+        assert 'id="toast-template"' in page.text
         assert "frame-ancestors 'none'" in page.headers["content-security-policy"]
 
         status = client.get("/api/status")
         assert status.status_code == 200
-        assert status.json()["server"] == {"state": "running", "version": "0.23.2"}
+        assert status.json()["server"] == {"state": "running", "version": "0.23.3"}
         assert status.json()["restart"]["can_restart"] is False
 
         assert client.post("/api/updates/check").status_code == 403
@@ -61,6 +63,35 @@ def test_ui_reports_running_server_and_protects_mutations(tmp_path: Path) -> Non
         check = client.post("/api/updates/check", headers={"X-Element-MCP-Token": token})
         assert check.status_code == 200
         assert check.json()["updates"]["state"] == "unavailable"
+
+
+def test_ui_serves_offline_assets_with_host_guard(tmp_path: Path) -> None:
+    server = create_server(
+        ServerSettings(
+            data_path=tmp_path / "data",
+            config_path=tmp_path / "config.json",
+            transport="streamable-http",
+            host="127.0.0.1",
+        )
+    )
+    with TestClient(server.streamable_http_app(), base_url="http://127.0.0.1") as client:
+        assets = {
+            "theme.js": "text/javascript",
+            "icons.svg": "image/svg+xml",
+            "jetbrains-mono-regular.woff2": "font/woff2",
+            "jetbrains-mono-medium.woff2": "font/woff2",
+            "jetbrains-mono-semibold.woff2": "font/woff2",
+        }
+        for name, content_type in assets.items():
+            response = client.get(f"/ui/{name}")
+            assert response.status_code == 200
+            assert response.headers["content-type"].startswith(content_type)
+            assert response.headers["x-content-type-options"] == "nosniff"
+            if name.endswith("woff2"):
+                assert response.content.startswith(b"wOF2")
+            assert client.get(f"/ui/{name}", headers={"host": "untrusted.example"}).status_code in {403, 421}
+        assert client.get("/ui/config.json").status_code == 404
+        assert client.get("/ui/../ui.py").status_code == 404
 
 
 def test_ui_configures_default_deny_managed_actions(tmp_path: Path) -> None:
@@ -359,7 +390,7 @@ def test_ui_configures_and_disables_remote_element_without_returning_secret(
     )
     with TestClient(server.streamable_http_app(), base_url="http://127.0.0.1") as client:
         page = client.get("/")
-        assert "Удалённый сервер Element" in page.text
+        assert "Панель управления" in page.text
         token = re.search(r'name="element-mcp-token" content="([^"]+)"', page.text).group(1)  # type: ignore[union-attr]
 
         missing = client.get("/api/console/configuration")

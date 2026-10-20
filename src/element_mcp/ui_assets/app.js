@@ -7,14 +7,12 @@ const action = document.querySelector("#update-action");
 const actionLabel = action.querySelector(".button-label");
 const restartAction = document.querySelector("#restart-action");
 const restartMessage = document.querySelector("#restart-message");
-const sourceToggle = document.querySelector("#source-toggle");
 const sourceSettings = document.querySelector("#source-settings");
 const sourceInput = document.querySelector("#source-path");
 const sourceFeedback = document.querySelector("#source-feedback");
 const sourceError = document.querySelector("#source-error");
 const sourceUseOrigin = document.querySelector("#source-use-origin");
 const documentationSummary = document.querySelector("#documentation-summary");
-const documentationToggle = document.querySelector("#documentation-toggle");
 const documentationSettings = document.querySelector("#documentation-settings");
 const documentationPath = document.querySelector("#documentation-path");
 const documentationHelp = document.querySelector("#documentation-help");
@@ -22,7 +20,6 @@ const documentationFeedback = document.querySelector("#documentation-feedback");
 const documentationError = document.querySelector("#documentation-error");
 const documentationActivate = document.querySelector("#documentation-activate");
 const consoleSummary = document.querySelector("#console-summary");
-const consoleToggle = document.querySelector("#console-toggle");
 const consoleSettings = document.querySelector("#console-settings");
 const consoleEnabled = document.querySelector("#console-enabled");
 const consoleFields = document.querySelector("#console-fields");
@@ -34,7 +31,6 @@ const consoleFeedback = document.querySelector("#console-feedback");
 const consoleError = document.querySelector("#console-error");
 const consoleSave = document.querySelector("#console-save");
 const runtimeSummary = document.querySelector("#runtime-summary");
-const runtimeToggle = document.querySelector("#runtime-toggle");
 const runtimeSettings = document.querySelector("#runtime-settings");
 const runtimeInstanceRoot = document.querySelector("#runtime-instance-root");
 const runtimeManagerStatus = document.querySelector("#runtime-manager-status");
@@ -42,7 +38,6 @@ const runtimeFeedback = document.querySelector("#runtime-feedback");
 const runtimeError = document.querySelector("#runtime-error");
 const runtimeSave = document.querySelector("#runtime-save");
 const actionsSummary = document.querySelector("#actions-summary");
-const actionsToggle = document.querySelector("#actions-toggle");
 const actionsSettings = document.querySelector("#actions-settings");
 const actionsEnabled = document.querySelector("#actions-enabled");
 const actionsFields = document.querySelector("#actions-fields");
@@ -64,6 +59,80 @@ let runtimeBusy = false;
 let actionsConfiguration = null;
 let actionsBusy = false;
 let restartBusy = false;
+let updateBusy = false;
+let lastRestartNotice = "";
+let completedRestartId = null;
+const sourceLocal = document.querySelector("#source-use-local");
+const sourceSave = document.querySelector("#source-save");
+const toastQueue = [];
+const activeToasts = new Set();
+
+function showToast(text, kind = "success") {
+  if (!text) return;
+  toastQueue.push({ text, kind, trigger: document.activeElement });
+  drainToasts();
+}
+
+function drainToasts() {
+  while (toastQueue.length && activeToasts.size < 3) {
+    const { text, kind, trigger } = toastQueue.shift();
+    const toast = document.querySelector("#toast-template").content.firstElementChild.cloneNode(true);
+    const textNode = toast.querySelector(".toast-message");
+    const close = toast.querySelector(".toast-close");
+    toast.dataset.kind = kind;
+    textNode.setAttribute("role", kind === "error" ? "alert" : "status");
+    textNode.setAttribute("aria-live", kind === "error" ? "assertive" : "polite");
+    let timer;
+    const dismiss = () => {
+      window.clearTimeout(timer);
+      if (!activeToasts.delete(toast)) return;
+      if (toast.contains(document.activeElement)) {
+        const target = trigger?.isConnected && trigger.getClientRects().length && !trigger.disabled
+          ? trigger : document.querySelector('[data-page][aria-current="page"]');
+        target?.focus();
+      }
+      toast.remove();
+      drainToasts();
+    };
+    close.addEventListener("click", dismiss);
+    toast.addEventListener("keydown", event => { if (event.key === "Escape") dismiss(); });
+    activeToasts.add(toast);
+    document.querySelector("#toasts").append(toast);
+    textNode.textContent = text;
+    timer = window.setTimeout(dismiss, 3000);
+  }
+}
+
+function feedback(element, value, state = "") {
+  element.textContent = value;
+  element.hidden = !value;
+  if (value && !["loading", "pending"].includes(state)) showToast(value, state === "success" ? "success" : "error");
+}
+
+function selectPage(page) {
+  if (!["connections", "documentation", "actions", "updates"].includes(page)) return;
+  document.querySelectorAll("[data-screen]").forEach(element => { element.hidden = element.dataset.screen !== page; });
+  document.querySelectorAll("[data-page]").forEach(button => {
+    if (button.dataset.page === page) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  });
+  try { sessionStorage.setItem("element-mcp.page", page); } catch { /* Navigation still works without storage. */ }
+}
+
+document.querySelectorAll("[data-page]").forEach(button => button.addEventListener("click", () => selectPage(button.dataset.page)));
+try { selectPage(sessionStorage.getItem("element-mcp.page")); } catch { /* Use the first section. */ }
+document.querySelector("#endpoint").textContent = `${window.location.origin}/mcp`;
+
+function serverState(label, state = "") {
+  document.querySelector("#server-state-label").textContent = label;
+  document.querySelector("#server-state").dataset.state = state;
+}
+
+function restartLabel(label, busy = false) {
+  restartAction.setAttribute("aria-label", label);
+  restartAction.dataset.tooltip = label;
+  restartAction.setAttribute("aria-busy", String(busy));
+}
 
 function sleep(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
@@ -95,24 +164,22 @@ function showSourceError(value) {
   sourceError.textContent = value;
   sourceError.hidden = !value;
   sourceInput.setAttribute("aria-invalid", value ? "true" : "false");
+  if (value) showToast(value, "error");
 }
 
 function showSourceFeedback(value, state = "") {
-  sourceFeedback.textContent = value;
-  sourceFeedback.hidden = !value;
-  sourceFeedback.dataset.state = state;
+  feedback(sourceFeedback, value, state);
 }
 
 function showDocumentationError(value) {
   documentationError.textContent = value;
   documentationError.hidden = !value;
   documentationPath.setAttribute("aria-invalid", value ? "true" : "false");
+  if (value) showToast(value, "error");
 }
 
 function showDocumentationFeedback(value, state = "") {
-  documentationFeedback.textContent = value;
-  documentationFeedback.hidden = !value;
-  documentationFeedback.dataset.state = state;
+  feedback(documentationFeedback, value, state);
 }
 
 function setDocumentationBusy(value) {
@@ -124,8 +191,8 @@ function setDocumentationBusy(value) {
 }
 
 function documentationSummaryText(payload) {
-  if (payload.status === "ready") return `Подключена · ${payload.path}`;
-  if (payload.status === "invalid") return `Ошибка · ${payload.path}`;
+  if (payload.status === "ready") return "Подключена";
+  if (payload.status === "invalid") return "Нужна настройка";
   return "Не подключена";
 }
 
@@ -133,24 +200,23 @@ function renderDocumentationStatus(payload) {
   documentationStatus = payload;
   documentationSummary.textContent = documentationSummaryText(payload);
   documentationSummary.title = payload.path || "";
-  documentationToggle.textContent = documentationSettings.hidden
-    ? payload.path
-      ? "Изменить"
-      : "Подключить"
-    : "Скрыть";
+  documentationSummary.dataset.state = payload.status === "ready" ? "ready" : payload.status === "invalid" ? "error" : "";
   const fixedSetting =
     payload.path_source === "startup_argument"
       ? "параметром --corpus-path"
       : payload.path_source === "environment"
         ? "переменной ELEMENT_DOCS_PATH"
         : null;
-  documentationHelp.innerHTML = fixedSetting
-    ? `Путь задан ${fixedSetting}. Измените настройку запуска и перезапустите MCP.`
-    : "Укажите корень готового корпуса с <code>manifest.json</code> и каталогами " +
-      "<code>docs-lang</code>, <code>docs-console</code>, <code>docs-server</code>.";
+  documentationHelp.textContent = fixedSetting ? `Путь задан ${fixedSetting}.` : "";
+  documentationHelp.hidden = !fixedSetting;
   documentationPath.disabled = payload.path_change_supported === false;
   documentationActivate.disabled = payload.path_change_supported === false;
   if (!documentationDirty) documentationPath.value = payload.path || "";
+  const aggregate = payload.aggregate;
+  document.querySelector("#documentation-counts").hidden = !aggregate;
+  document.querySelector("#documentation-documents").textContent = aggregate?.documents ?? "—";
+  document.querySelector("#documentation-chunks").textContent = aggregate?.chunks ?? "—";
+  if (payload.status === "invalid") showDocumentationError(payload.message || "Каталог документации недоступен.");
 }
 
 async function loadDocumentationStatus() {
@@ -159,6 +225,7 @@ async function loadDocumentationStatus() {
   } catch (error) {
     documentationSummary.textContent = "Недоступна";
     showDocumentationError(error.message);
+    setDocumentationBusy(false);
   }
 }
 
@@ -182,13 +249,7 @@ async function activateDocumentation() {
     });
     documentationDirty = false;
     renderDocumentationStatus(payload);
-    const documents = payload.aggregate?.documents;
-    const chunks = payload.aggregate?.chunks;
-    const details =
-      Number.isInteger(documents) && Number.isInteger(chunks)
-        ? ` Документов: ${documents}, фрагментов: ${chunks}.`
-        : "";
-    showDocumentationFeedback(`Корпус проверен и подключён.${details}`, "success");
+    showDocumentationFeedback("Документация подключена", "success");
   } catch (error) {
     showDocumentationFeedback("");
     showDocumentationError(error.message);
@@ -204,21 +265,21 @@ function showConsoleError(value, invalidField = null) {
   for (const input of [consoleServer, consoleClientId, consoleClientSecret]) {
     input.setAttribute("aria-invalid", input === invalidField ? "true" : "false");
   }
+  if (value) showToast(value, "error");
 }
 
 function showConsoleFeedback(value, state = "") {
-  consoleFeedback.textContent = value;
-  consoleFeedback.hidden = !value;
-  consoleFeedback.dataset.state = state;
+  feedback(consoleFeedback, value, state);
 }
 
 function setConsoleBusy(value, label = "") {
   consoleBusy = value;
+  consoleFields.disabled = value || !consoleEnabled.checked;
   consoleEnabled.disabled = value;
   consoleServer.disabled = value;
   consoleClientId.disabled = value;
   consoleClientSecret.disabled = value;
-  consoleSave.disabled = value;
+  consoleSave.disabled = value || !consoleEnabled.checked;
   if (label) consoleSave.textContent = label;
 }
 
@@ -230,23 +291,23 @@ function renderConsoleConfiguration(payload) {
       ? "Нужна настройка"
       : payload.configured
         ? payload.enabled
-          ? payload.server
+          ? "Подключена"
           : "Отключена"
         : "Не настроена";
   consoleSummary.title = payload.server || "";
   consoleServer.value = payload.server || "";
   consoleClientId.value = payload.client_id || "";
   consoleClientSecret.value = "";
-  consoleClientSecret.placeholder = payload.secret_present ? "Сохранён — оставьте пустым" : "";
+  resetSecretVisibility();
+  consoleClientSecret.placeholder = payload.secret_present ? "Сохранён" : "";
   consoleSecretHelp.textContent =
     payload.credential_kind === "access_token"
-      ? "Текущая конфигурация использует готовый токен. Введите Client ID и Client Secret, чтобы перейти на автоматическое получение bearer."
-      : payload.secret_present
-        ? "Оставьте поле пустым, чтобы использовать сохранённый секрет. Он не возвращается в браузер или агенту."
-        : "Секрет не возвращается в браузер или агенту после сохранения.";
-  consoleFields.hidden = !payload.enabled;
+      ? "Токен: для смены подключения нужны Client ID и Client Secret."
+      : "";
+  consoleSecretHelp.hidden = !consoleSecretHelp.textContent;
+  consoleFields.disabled = !payload.enabled;
   consoleSave.textContent = payload.configured ? "Проверить и сохранить" : "Проверить и включить";
-  consoleToggle.textContent = consoleSettings.hidden ? "Настроить" : "Скрыть";
+  if (payload.status === "invalid") showConsoleError(payload.message || "Проверьте настройки подключения.");
 }
 
 async function loadConsoleConfiguration() {
@@ -255,6 +316,8 @@ async function loadConsoleConfiguration() {
   } catch (error) {
     consoleSummary.textContent = "Недоступна";
     showConsoleError(error.message);
+  } finally {
+    setConsoleBusy(false);
   }
 }
 
@@ -276,12 +339,12 @@ async function saveConsoleConnection() {
     });
     renderConsoleConfiguration(payload);
     showConsoleFeedback(
-      `Подключение работает. Доступно пространств: ${payload.spaces_count}.`,
+      "Подключение проверено и сохранено",
       "success",
     );
   } catch (error) {
-    consoleEnabled.checked = Boolean(consoleConfiguration?.enabled);
-    consoleFields.hidden = false;
+    consoleEnabled.checked = true;
+    consoleFields.disabled = false;
     showConsoleFeedback("");
     let invalidField = null;
     if (!consoleServer.value.trim()) invalidField = consoleServer;
@@ -309,10 +372,10 @@ async function disableConsoleConnection() {
       body: JSON.stringify({ enabled: false }),
     });
     renderConsoleConfiguration(payload);
-    showConsoleFeedback("Удалённый сервер отключён. Настройки сохранены.", "success");
+    showConsoleFeedback("Подключение отключено", "success");
   } catch (error) {
     consoleEnabled.checked = true;
-    consoleFields.hidden = false;
+    consoleFields.disabled = false;
     showConsoleFeedback("");
     showConsoleError(error.message);
   } finally {
@@ -324,12 +387,11 @@ function showRuntimeError(value, invalidField = null) {
   runtimeError.textContent = value;
   runtimeError.hidden = !value;
   runtimeInstanceRoot.setAttribute("aria-invalid", runtimeInstanceRoot === invalidField ? "true" : "false");
+  if (value) showToast(value, "error");
 }
 
 function showRuntimeFeedback(value, state = "") {
-  runtimeFeedback.textContent = value;
-  runtimeFeedback.hidden = !value;
-  runtimeFeedback.dataset.state = state;
+  feedback(runtimeFeedback, value, state);
 }
 
 function setRuntimeBusy(value) {
@@ -337,23 +399,23 @@ function setRuntimeBusy(value) {
   for (const input of [runtimeInstanceRoot, runtimeSave]) {
     input.disabled = value;
   }
-  runtimeSave.textContent = value ? "Сохраняем…" : "Сохранить настройки";
+  runtimeSave.textContent = value ? "Сохраняем…" : "Сохранить";
 }
 
 function renderRuntimeConfiguration(payload) {
   const manager = payload.application_manager || {};
   runtimeSummary.textContent =
-    payload.status === "configured" ? payload.instance_root : "Не настроен";
+    payload.status === "configured" ? "Подключён" : "Не настроен";
+  runtimeSummary.dataset.state = payload.status === "configured" ? "ready" : "";
   runtimeSummary.title = payload.instance_root || "";
   runtimeInstanceRoot.value = payload.instance_root || "";
   if (manager.status === "configured") {
-    runtimeManagerStatus.textContent = "Журнал событий подключён автоматически.";
+    runtimeManagerStatus.textContent = "Журнал событий подключён";
   } else if (manager.message) {
-    runtimeManagerStatus.textContent = `Журнал событий пока недоступен: ${manager.message}`;
+    runtimeManagerStatus.textContent = `Журнал событий: ${manager.message}`;
   } else {
-    runtimeManagerStatus.textContent = "Журнал событий будет проверен после выбора экземпляра.";
+    runtimeManagerStatus.textContent = "";
   }
-  runtimeToggle.textContent = runtimeSettings.hidden ? "Настроить" : "Скрыть";
 }
 
 async function loadRuntimeConfiguration() {
@@ -362,6 +424,8 @@ async function loadRuntimeConfiguration() {
   } catch (error) {
     runtimeSummary.textContent = "Недоступен";
     showRuntimeError(error.message);
+  } finally {
+    setRuntimeBusy(false);
   }
 }
 
@@ -385,12 +449,7 @@ async function saveRuntimeConfiguration() {
       }),
     });
     renderRuntimeConfiguration(payload);
-    showRuntimeFeedback(
-      payload.application_manager?.status === "configured"
-        ? "Диагностика и журнал событий готовы."
-        : "Локальная диагностика настроена. Состояние журнала событий показано выше.",
-      "success",
-    );
+    showRuntimeFeedback("Настройки сервера сохранены", "success");
   } catch (error) {
     showRuntimeFeedback("");
     showRuntimeError(error.message);
@@ -405,16 +464,16 @@ function showActionsError(value, invalidField = null) {
   for (const input of [actionsUploadRoots]) {
     input.setAttribute("aria-invalid", input === invalidField ? "true" : "false");
   }
+  if (value) showToast(value, "error");
 }
 
 function showActionsFeedback(value, state = "") {
-  actionsFeedback.textContent = value;
-  actionsFeedback.hidden = !value;
-  actionsFeedback.dataset.state = state;
+  feedback(actionsFeedback, value, state);
 }
 
 function setActionsBusy(value, label = "") {
   actionsBusy = value;
+  actionsFields.disabled = value || !actionsEnabled.checked;
   for (const input of [
     actionsEnabled,
     ...actionInputs,
@@ -423,6 +482,8 @@ function setActionsBusy(value, label = "") {
   ]) {
     input.disabled = value;
   }
+  actionsSave.disabled = value || !actionsEnabled.checked || !actionsConfiguration;
+  actionsEnabled.disabled = value || !actionsConfiguration;
   if (label) actionsSave.textContent = label;
 }
 
@@ -436,22 +497,20 @@ function renderActionsConfiguration(payload) {
   actionsEnabled.checked = Boolean(payload.enabled);
   for (const input of actionInputs) input.checked = allowed.has(input.value);
   actionsUploadRoots.value = (payload.upload_roots || []).join("\n");
-  actionsFields.hidden = !payload.enabled;
-  actionsSave.hidden = !payload.enabled;
+  actionsFields.disabled = !payload.enabled;
+  actionsSave.disabled = !payload.enabled;
   actionsSummary.textContent =
     payload.status === "invalid"
       ? "Нужна настройка"
       : payload.enabled
-        ? `Включены · ${allowed.size} оп.`
+        ? "Включены"
         : "Выключены";
-  actionsSummary.title = payload.enabled
-    ? "Разрешены выбранные операции только для приложения текущей IDE-сессии"
-    : "Запись в Console запрещена";
-  actionsToggle.textContent = actionsSettings.hidden ? "Настроить" : "Скрыть";
   if (payload.migration_required) {
     showActionsFeedback(
-      "Ручные UUID-списки больше не используются. Действия выключены: проверьте операции и включите доступ к текущему workspace заново.",
+      "После обновления нужно заново включить действия агента.",
     );
+  } else if (payload.status === "invalid") {
+    showActionsError(payload.message || "Проверьте настройки действий агента.");
   }
 }
 
@@ -461,6 +520,8 @@ async function loadActionsConfiguration() {
   } catch (error) {
     actionsSummary.textContent = "Недоступны";
     showActionsError(error.message);
+  } finally {
+    setActionsBusy(false);
   }
 }
 
@@ -508,34 +569,48 @@ async function saveActionsConfiguration(enabled = true) {
     renderActionsConfiguration(payload);
     showActionsFeedback(
       enabled
-        ? "Разрешения сохранены. Каждое действие всё равно потребует отдельного подтверждения."
-        : "Действия агента выключены. Сохранённые разрешения можно включить снова.",
+        ? "Разрешения сохранены"
+        : "Действия агента выключены",
       "success",
     );
   } catch (error) {
     actionsEnabled.checked = Boolean(actionsConfiguration?.enabled);
-    actionsFields.hidden = !actionsEnabled.checked;
-    actionsSave.hidden = !actionsEnabled.checked;
+    actionsFields.disabled = !actionsEnabled.checked;
+    actionsSave.disabled = !actionsEnabled.checked;
     showActionsFeedback("");
     showActionsError(error.message);
   } finally {
     setActionsBusy(false);
-    actionsSave.textContent = "Сохранить разрешения";
+    actionsSave.textContent = "Сохранить";
   }
 }
 
 function setSourceEditor(updateSource) {
   if (!sourceDirty) {
     sourceInput.value = updateSource.kind === "local" ? updateSource.label : "";
+    setSourceMode(updateSource.kind === "local" ? "local" : "remote");
   }
-  sourceUseOrigin.hidden = updateSource.kind !== "local" && !sourceDirty;
+}
+
+function setSourceMode(mode) {
+  sourceLocal.setAttribute("aria-pressed", String(mode === "local"));
+  sourceUseOrigin.setAttribute("aria-pressed", String(mode === "remote"));
+  document.querySelector("#source-local-field").hidden = mode !== "local";
+  document.querySelector("#source-remote-field").hidden = mode === "local";
+  document.querySelector("#source-save-area").hidden = mode !== "local";
+}
+
+function setUpdateBusy(value) {
+  updateBusy = value;
+  for (const control of [sourceInput, sourceLocal, sourceUseOrigin, sourceSave]) control.disabled = value;
+  action.setAttribute("aria-busy", String(value));
+  if (value) { action.disabled = true; restartAction.disabled = true; }
 }
 
 function markSourceDirty() {
   sourceDirty = true;
   showSourceError("");
-  showSourceFeedback("Путь изменён. Сохраните его вместе с проверкой обновлений.", "pending");
-  sourceUseOrigin.hidden = false;
+  showSourceFeedback("");
   actionLabel.textContent = "Сохранить и проверить";
   action.disabled = false;
   action.dataset.action = "check";
@@ -545,6 +620,10 @@ function showRestartMessage(value, state = "") {
   restartMessage.textContent = value;
   restartMessage.hidden = !value;
   restartMessage.dataset.state = state;
+  if (value && ["success", "error"].includes(state) && lastRestartNotice !== `${state}:${value}`) {
+    lastRestartNotice = `${state}:${value}`;
+    showToast(value, state);
+  }
 }
 
 function renderRestart(payload, updateInProgress) {
@@ -552,15 +631,15 @@ function renderRestart(payload, updateInProgress) {
   const restartInProgress = ["queued", "restarting"].includes(restart.state);
   const restartUpdatedAt = Date.parse(restart.updated_at || "");
   const recentlyRestarted = Number.isFinite(restartUpdatedAt) && Date.now() - restartUpdatedAt < 60_000;
-  restartAction.textContent = restartInProgress ? "Перезапускаем…" : "Перезапустить сервер";
-  restartAction.disabled = restartBusy || updateInProgress || restartInProgress || !restart.can_restart;
+  restartLabel(restartInProgress ? "Перезапускаем…" : restart.can_restart ? "Перезапустить сервер" : "Перезапуск доступен на Windows Server", restartInProgress);
+  restartAction.disabled = restartBusy || updateBusy || updateInProgress || restartInProgress || !restart.can_restart;
 
   if (restartInProgress) {
     showRestartMessage(restart.message || "MCP перезапускается…");
   } else if (restart.state === "error") {
     showRestartMessage(restart.message || "Не удалось перезапустить MCP.", "error");
-  } else if (restart.state === "success" && recentlyRestarted) {
-    showRestartMessage(restart.message || "MCP успешно перезапущен.", "success");
+  } else if (restart.state === "success" && recentlyRestarted && restart.request_id !== completedRestartId) {
+    showRestartMessage(restart.message || "Сервер перезапущен", "success");
   } else if (!restart.can_restart) {
     showRestartMessage("Перезапуск из интерфейса доступен для установки Windows Server.");
   } else {
@@ -573,12 +652,17 @@ function render(payload) {
   latestStatus = payload;
   initialVersion ||= payload.server.version;
   version.textContent = payload.server.version;
+  document.querySelector("#footer-version").textContent = payload.server.version;
+  serverState("Работает", "running");
+  document.querySelector("#latest-version").textContent = payload.updates.available_version ||
+    (payload.updates.state === "current" ? payload.server.version : payload.updates.state === "unavailable" ? "Недоступна" : "Не проверена");
   source.textContent = sourceText(payload.updates.source);
   source.title = payload.updates.source.label;
   setSourceEditor(payload.updates.source);
 
   const applyState = payload.updates.apply?.state;
   const updateInProgress = ["queued", "checking", "applying"].includes(applyState);
+  for (const control of [sourceInput, sourceLocal, sourceUseOrigin, sourceSave]) control.disabled = updateBusy || updateInProgress || restartBusy;
   const restartInProgress = renderRestart(payload, updateInProgress);
   if (updateInProgress) {
     title.textContent = "Устанавливаем обновление";
@@ -622,7 +706,7 @@ function render(payload) {
     action.disabled = false;
     action.dataset.action = "check";
   }
-  if (restartInProgress) action.disabled = true;
+  if (restartInProgress || restartBusy || updateBusy) action.disabled = true;
 }
 
 async function saveSourceIfNeeded() {
@@ -630,7 +714,8 @@ async function saveSourceIfNeeded() {
 
   showSourceError("");
   try {
-    const path = sourceInput.value.trim() || null;
+    const path = sourceInput.value.trim();
+    if (!path) throw new Error("Укажите полный путь к репозиторию.");
     const payload = await api("/api/updates/source", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -638,7 +723,7 @@ async function saveSourceIfNeeded() {
     });
     sourceDirty = false;
     render(payload);
-    showSourceFeedback("Локальный источник сохранён. Проверяем обновления…", "success");
+    showSourceFeedback("");
   } catch (error) {
     showSourceError(error.message);
     sourceInput.focus();
@@ -647,10 +732,9 @@ async function saveSourceIfNeeded() {
 }
 
 async function switchToOrigin() {
-  const originalLabel = sourceUseOrigin.textContent;
-  sourceUseOrigin.disabled = true;
-  sourceInput.disabled = true;
-  sourceUseOrigin.textContent = "Переключаем…";
+  if (updateBusy || restartBusy) return;
+  if (latestStatus?.updates.source.kind !== "local" && !sourceDirty) { setSourceMode("remote"); return; }
+  setUpdateBusy(true);
   showSourceError("");
   showSourceFeedback("Сохраняем удалённый origin…", "loading");
 
@@ -664,26 +748,26 @@ async function switchToOrigin() {
     sourceInput.value = "";
     render(payload);
     showSourceFeedback("");
-    sourceSettings.hidden = true;
-    sourceToggle.setAttribute("aria-expanded", "false");
-    sourceToggle.textContent = "Изменить";
+    setSourceMode("remote");
     title.textContent = "Источник обновлений изменён";
     message.textContent = "Следующая проверка будет выполнена через удалённый origin.";
     actionLabel.textContent = "Проверить обновления";
     action.disabled = false;
     action.dataset.action = "check";
-    sourceToggle.focus();
+    showToast("Источник обновлений сохранён");
   } catch (error) {
     showSourceFeedback("");
     showSourceError(`Не удалось переключиться на origin: ${error.message}`);
   } finally {
-    sourceInput.disabled = false;
-    sourceUseOrigin.disabled = false;
-    sourceUseOrigin.textContent = originalLabel;
+    setUpdateBusy(false);
+    if (latestStatus) render(latestStatus);
   }
 }
 
 async function checkUpdates(applyLocalUpdate = false) {
+  if (updateBusy || restartBusy) return;
+  setUpdateBusy(true);
+  let shouldApply = false;
   action.disabled = true;
   actionLabel.textContent = "Проверяем…";
   title.textContent = "Проверяем обновления";
@@ -693,22 +777,32 @@ async function checkUpdates(applyLocalUpdate = false) {
     const payload = await api("/api/updates/check", { method: "POST" });
     render(payload);
     showSourceFeedback("");
-    if (
+    shouldApply = Boolean(
       applyLocalUpdate &&
       payload.updates.source.kind === "local" &&
       payload.updates.state === "available" &&
       payload.updates.can_apply
-    ) {
-      await applyUpdate();
-    }
+    );
+    if (!shouldApply) showToast(
+      payload.updates.state === "current" ? "Установлена последняя версия" :
+        payload.updates.state === "available" ? `Доступна версия ${payload.updates.available_version}` :
+          payload.updates.message || "Проверка обновлений недоступна",
+      payload.updates.state === "unavailable" ? "error" : "success",
+    );
   } catch (error) {
     showSourceFeedback("");
     title.textContent = sourceError.hidden ? "Проверка недоступна" : "Проверьте каталог";
     message.textContent = error.message;
+    if (sourceError.hidden) showToast(error.message, "error");
     action.disabled = false;
     actionLabel.textContent = "Проверить обновления";
     action.dataset.action = "check";
+  } finally {
+    setUpdateBusy(false);
+    if (latestStatus) render(latestStatus);
+    else action.disabled = false;
   }
+  if (shouldApply) await applyUpdate();
 }
 
 async function waitForRestart(restartRequestId = null) {
@@ -719,6 +813,7 @@ async function waitForRestart(restartRequestId = null) {
     try {
       payload = await api(`/api/status?t=${Date.now()}`);
     } catch {
+      serverState("Перезапуск…");
       if (restartRequestId) {
         showRestartMessage("MCP перезапускается. Страница подключится снова автоматически.");
       } else {
@@ -732,26 +827,25 @@ async function waitForRestart(restartRequestId = null) {
     const requestedRestart =
       restartRequestId && payload.restart?.request_id === restartRequestId ? payload.restart : null;
     if (requestedRestart?.state === "error") throw new Error(requestedRestart.message);
+    if (!restartRequestId && payload.updates.apply?.state === "error") throw new Error(payload.updates.apply.message);
     if (
       requestedRestart?.state === "success" ||
       (!restartRequestId &&
         (payload.server.version !== initialVersion || payload.updates.apply?.state === "success"))
     ) {
+      try { sessionStorage.setItem("element-mcp.completed", JSON.stringify({ at: Date.now(), restartId: restartRequestId, text: restartRequestId ? "Сервер перезапущен" : "Обновление установлено" })); } catch { /* Reload is still required for a fresh CSRF token. */ }
       window.location.reload();
       return;
     }
     render(payload);
     await sleep(1_500);
   }
-  if (restartRequestId) {
-    throw new Error("Перезапуск занимает больше времени. Обновите страницу или проверьте журнал службы.");
-  } else {
-    title.textContent = "Перезапуск занимает больше времени";
-    message.textContent = "Обновите страницу или проверьте журнал службы.";
-  }
+  throw new Error("Перезапуск занимает больше времени. Обновите страницу или проверьте журнал службы.");
 }
 
 async function applyUpdate() {
+  if (updateBusy || restartBusy) return;
+  setUpdateBusy(true);
   action.disabled = true;
   actionLabel.textContent = "Запускаем обновление…";
   try {
@@ -760,17 +854,23 @@ async function applyUpdate() {
   } catch (error) {
     title.textContent = "Обновление не запущено";
     message.textContent = error.message;
+    showToast(error.message, "error");
     action.disabled = false;
     actionLabel.textContent = "Проверить обновления";
     action.dataset.action = "check";
+  } finally {
+    setUpdateBusy(false);
+    if (latestStatus) render(latestStatus);
   }
 }
 
 async function restartServer() {
-  if (restartBusy) return;
+  if (restartBusy || updateBusy || restartAction.disabled) return;
+  lastRestartNotice = "";
   restartBusy = true;
   restartAction.disabled = true;
-  restartAction.textContent = "Запускаем перезапуск…";
+  restartLabel("Перезапуск…", true);
+  for (const control of [sourceInput, sourceLocal, sourceUseOrigin, sourceSave]) control.disabled = true;
   action.disabled = true;
   showRestartMessage("Текущие подключения MCP будут кратко прерваны.");
   try {
@@ -780,9 +880,10 @@ async function restartServer() {
   } catch (error) {
     restartBusy = false;
     showRestartMessage(error.message, "error");
-    restartAction.textContent = "Перезапустить сервер";
+    restartLabel("Перезапустить сервер");
     restartAction.disabled = !latestStatus?.restart?.can_restart;
     action.disabled = false;
+    if (latestStatus) render(latestStatus);
   }
 }
 
@@ -793,15 +894,11 @@ action.addEventListener("click", () => {
 
 restartAction.addEventListener("click", restartServer);
 
-sourceToggle.addEventListener("click", () => {
-  const open = sourceSettings.hidden;
-  sourceSettings.hidden = !open;
-  sourceToggle.setAttribute("aria-expanded", String(open));
-  sourceToggle.textContent = open ? "Скрыть" : "Изменить";
-  if (open) {
-    if (!sourceDirty) showSourceFeedback("");
-    sourceInput.focus();
-  }
+sourceLocal.addEventListener("click", () => {
+  if (updateBusy || restartBusy) return;
+  setSourceMode("local");
+  if (latestStatus?.updates.source.kind !== "local") markSourceDirty();
+  sourceInput.focus();
 });
 
 sourceInput.addEventListener("input", markSourceDirty);
@@ -813,26 +910,10 @@ sourceSettings.addEventListener("submit", (event) => {
   checkUpdates(true);
 });
 
-documentationToggle.addEventListener("click", () => {
-  const open = documentationSettings.hidden;
-  documentationSettings.hidden = !open;
-  documentationToggle.setAttribute("aria-expanded", String(open));
-  documentationToggle.textContent = open
-    ? "Скрыть"
-    : documentationStatus?.path
-      ? "Изменить"
-      : "Подключить";
-  if (open) {
-    showDocumentationFeedback("");
-    showDocumentationError(documentationStatus?.status === "invalid" ? documentationStatus.message : "");
-    documentationPath.focus();
-  }
-});
-
 documentationPath.addEventListener("input", () => {
   documentationDirty = true;
   showDocumentationError("");
-  showDocumentationFeedback("Путь изменён, но ещё не подключён.", "pending");
+  showDocumentationFeedback("");
 });
 
 documentationSettings.addEventListener("submit", (event) => {
@@ -840,33 +921,20 @@ documentationSettings.addEventListener("submit", (event) => {
   activateDocumentation();
 });
 
-consoleToggle.addEventListener("click", () => {
-  const open = consoleSettings.hidden;
-  consoleSettings.hidden = !open;
-  consoleToggle.setAttribute("aria-expanded", String(open));
-  consoleToggle.textContent = open ? "Скрыть" : "Настроить";
-  if (open) {
-    showConsoleError(consoleConfiguration?.status === "invalid" ? consoleConfiguration.message : "");
-    showConsoleFeedback("");
-    if (consoleEnabled.checked) consoleServer.focus();
-    else consoleEnabled.focus();
-  }
-});
-
 consoleEnabled.addEventListener("change", () => {
   if (consoleEnabled.checked) {
-    consoleFields.hidden = false;
+    consoleFields.disabled = false;
+    consoleSave.disabled = false;
     if (
       consoleConfiguration?.configured &&
       consoleConfiguration?.credential_kind === "client_credentials"
     ) {
       saveConsoleConnection();
     } else {
-      showConsoleFeedback("Заполните адрес и учётные данные, затем проверьте подключение.", "pending");
       consoleServer.focus();
     }
   } else {
-    consoleFields.hidden = true;
+    consoleFields.disabled = true;
     disableConsoleConnection();
   }
 });
@@ -876,52 +944,21 @@ consoleSettings.addEventListener("submit", (event) => {
   saveConsoleConnection();
 });
 
-runtimeToggle.addEventListener("click", () => {
-  const open = runtimeSettings.hidden;
-  runtimeSettings.hidden = !open;
-  runtimeToggle.setAttribute("aria-expanded", String(open));
-  runtimeToggle.textContent = open ? "Скрыть" : "Настроить";
-  if (open) {
-    showRuntimeFeedback("");
-    showRuntimeError("");
-    runtimeInstanceRoot.focus();
-  }
-});
-
 runtimeSettings.addEventListener("submit", (event) => {
   event.preventDefault();
   saveRuntimeConfiguration();
 });
 
-actionsToggle.addEventListener("click", () => {
-  const open = actionsSettings.hidden;
-  actionsSettings.hidden = !open;
-  actionsToggle.setAttribute("aria-expanded", String(open));
-  actionsToggle.textContent = open ? "Скрыть" : "Настроить";
-  if (open) {
-    showActionsFeedback(
-      actionsConfiguration?.migration_required
-        ? "Ручные UUID-списки больше не используются. Действия выключены: проверьте операции и включите доступ к текущему workspace заново."
-        : "",
-    );
-    showActionsError(actionsConfiguration?.status === "invalid" ? actionsConfiguration.message : "");
-    actionsEnabled.focus();
-  }
-});
-
 actionsEnabled.addEventListener("change", () => {
   if (actionsEnabled.checked) {
-    actionsFields.hidden = false;
-    actionsSave.hidden = false;
+    actionsFields.disabled = false;
+    actionsSave.disabled = false;
     showActionsError("");
-    showActionsFeedback(
-      "Выберите операции для приложения текущего workspace, затем сохраните разрешения.",
-      "pending",
-    );
+    actionsSummary.textContent = "Не сохранено";
     actionInputs[0]?.focus();
   } else {
-    actionsFields.hidden = true;
-    actionsSave.hidden = true;
+    actionsFields.disabled = true;
+    actionsSave.disabled = true;
     saveActionsConfiguration(false);
   }
 });
@@ -930,6 +967,35 @@ actionsSettings.addEventListener("submit", (event) => {
   event.preventDefault();
   saveActionsConfiguration(true);
 });
+
+function resetSecretVisibility() {
+  consoleClientSecret.type = "password";
+  const button = document.querySelector("#secret-visibility");
+  button.setAttribute("aria-label", "Показать Client Secret");
+  button.dataset.tooltip = "Показать Client Secret";
+}
+
+document.querySelector("#secret-visibility").addEventListener("click", event => {
+  const show = consoleClientSecret.type === "password";
+  consoleClientSecret.type = show ? "text" : "password";
+  const label = show ? "Скрыть Client Secret" : "Показать Client Secret";
+  event.currentTarget.setAttribute("aria-label", label);
+  event.currentTarget.dataset.tooltip = label;
+});
+
+document.querySelectorAll("form").forEach(form => form.addEventListener("input", event => {
+  const input = event.target;
+  if (input.getAttribute("aria-invalid") === "true") input.removeAttribute("aria-invalid");
+}));
+
+try {
+  const notice = JSON.parse(sessionStorage.getItem("element-mcp.completed") || "null");
+  sessionStorage.removeItem("element-mcp.completed");
+  if (notice && Date.now() - notice.at < 60_000) {
+    showToast(notice.text);
+    completedRestartId = notice.restartId || null;
+  }
+} catch { /* A previous restart notice is optional. */ }
 
 loadDocumentationStatus();
 loadConsoleConfiguration();
@@ -942,8 +1008,10 @@ api("/api/status")
     return checkUpdates(false);
   })
   .catch((error) => {
+    serverState("Недоступен", "error");
     title.textContent = "Не удалось получить состояние";
     message.textContent = error.message;
+    showToast(error.message, "error");
     action.disabled = false;
     actionLabel.textContent = "Повторить";
     action.dataset.action = "check";

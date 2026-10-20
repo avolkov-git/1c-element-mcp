@@ -37,6 +37,16 @@ jobs:
       - name: Test
         run: python -m pytest -q
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Test UI behavior
+        working-directory: tests/ui
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm test
+
       - name: Validate Windows installer syntax
         if: runner.os == 'Windows'
         shell: pwsh

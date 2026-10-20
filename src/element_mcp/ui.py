@@ -81,6 +81,27 @@ def register_ui(
             headers={"Cache-Control": "no-cache"},
         )
 
+    @server.custom_route("/ui/{name}", methods=["GET"], include_in_schema=False)
+    async def static_asset(request: Request) -> Response:
+        if not host_allowed(request):
+            return Response(status_code=403)
+        name = request.path_params["name"]
+        content_types = {
+            "theme.js": "text/javascript",
+            "icons.svg": "image/svg+xml",
+            "jetbrains-mono-regular.woff2": "font/woff2",
+            "jetbrains-mono-medium.woff2": "font/woff2",
+            "jetbrains-mono-semibold.woff2": "font/woff2",
+        }
+        if name not in content_types:
+            return Response(status_code=404)
+        content = resources.files("element_mcp").joinpath("ui_assets", name).read_bytes()
+        return Response(
+            content,
+            media_type=content_types[name],
+            headers={"Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff"},
+        )
+
     @server.custom_route("/favicon.ico", methods=["GET"], include_in_schema=False)
     async def favicon(request: Request) -> Response:
         return Response(status_code=204 if host_allowed(request) else 403)

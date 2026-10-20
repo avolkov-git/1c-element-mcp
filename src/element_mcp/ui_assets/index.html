@@ -1,317 +1,97 @@
 <!doctype html>
 <html lang="ru">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="light dark">
-    <meta name="element-mcp-token" content="{{CSRF_TOKEN}}">
-    <title>1C Element MCP</title>
-    <link rel="stylesheet" href="/ui/styles.css">
-    <script src="/ui/app.js" defer></script>
-  </head>
-  <body>
-    <main class="page">
-      <section class="panel" aria-labelledby="page-title">
-        <header class="header">
-          <h1 id="page-title">1C Element MCP</h1>
-          <p>Локальный сервер для работы ИИ-агентов с 1С:Элемент.</p>
-        </header>
-
-        <div class="runtime-status">
-          <span class="status-dot" aria-hidden="true"></span>
-          <div>
-            <h2>MCP работает</h2>
-            <p>Сервер отвечает на этом компьютере.</p>
-          </div>
-        </div>
-
-        <dl class="metadata">
-          <div class="metadata-row">
-            <dt>Версия</dt>
-            <dd id="server-version">—</dd>
-          </div>
-          <div class="metadata-row">
-            <dt>Документация</dt>
-            <dd class="source-value">
-              <span id="documentation-summary">—</span>
-              <button
-                id="documentation-toggle"
-                class="text-action"
-                type="button"
-                aria-expanded="false"
-                aria-controls="documentation-settings"
-              >Изменить</button>
-            </dd>
-          </div>
-          <div class="metadata-row">
-            <dt>Источник обновлений</dt>
-            <dd class="source-value">
-              <span id="update-source">—</span>
-              <button
-                id="source-toggle"
-                class="text-action"
-                type="button"
-                aria-expanded="false"
-                aria-controls="source-settings"
-              >Изменить</button>
-            </dd>
-          </div>
-          <div class="metadata-row">
-            <dt>Панель управления</dt>
-            <dd class="source-value">
-              <span id="console-summary">—</span>
-              <button
-                id="console-toggle"
-                class="text-action"
-                type="button"
-                aria-expanded="false"
-                aria-controls="console-settings"
-              >Настроить</button>
-            </dd>
-          </div>
-          <div class="metadata-row">
-            <dt>Сервер Element</dt>
-            <dd class="source-value">
-              <span id="runtime-summary">—</span>
-              <button
-                id="runtime-toggle"
-                class="text-action"
-                type="button"
-                aria-expanded="false"
-                aria-controls="runtime-settings"
-              >Настроить</button>
-            </dd>
-          </div>
-          <div class="metadata-row">
-            <dt>Действия агента</dt>
-            <dd class="source-value">
-              <span id="actions-summary">—</span>
-              <button
-                id="actions-toggle"
-                class="text-action"
-                type="button"
-                aria-expanded="false"
-                aria-controls="actions-settings"
-              >Настроить</button>
-            </dd>
-          </div>
-        </dl>
-
-        <form id="documentation-settings" class="documentation-settings" hidden novalidate>
-          <label for="documentation-path">Каталог нормализованной документации</label>
-          <input
-            id="documentation-path"
-            name="documentation-path"
-            type="text"
-            maxlength="4096"
-            autocomplete="off"
-            spellcheck="false"
-            placeholder="C:\ProgramData\1c-element-mcp\data\corpora\element-9.2.4-6"
-            aria-describedby="documentation-help documentation-feedback documentation-error"
-          >
-          <p id="documentation-help" class="settings-help">
-            Укажите корень готового корпуса с <code>manifest.json</code> и каталогами
-            <code>docs-lang</code>, <code>docs-console</code>, <code>docs-server</code>.
-          </p>
-          <p id="documentation-feedback" class="source-feedback" role="status" aria-live="polite" hidden></p>
-          <p id="documentation-error" class="source-error" role="alert" hidden></p>
-          <button id="documentation-activate" class="settings-action" type="submit">
-            Проверить и подключить
-          </button>
-        </form>
-
-        <form id="source-settings" class="source-settings" hidden novalidate>
-          <label for="source-path">Путь к локальному Git-каталогу</label>
-          <input
-            id="source-path"
-            name="source-path"
-            type="text"
-            maxlength="4096"
-            autocomplete="off"
-            spellcheck="false"
-            placeholder="C:\Users\cibot\Desktop\1c-element-mcp"
-            aria-describedby="source-help source-error"
-          >
-          <p id="source-help" class="source-help">
-            MCP читает ветку <code>master</code> из доверенного клона. После изменения пути
-            сохраните его вместе с проверкой обновлений.
-          </p>
-          <p id="source-feedback" class="source-feedback" role="status" aria-live="polite" hidden></p>
-          <p id="source-error" class="source-error" role="alert" hidden></p>
-          <button id="source-use-origin" class="secondary-action" type="button">
-            Переключиться на удалённый origin
-          </button>
-        </form>
-
-        <form id="console-settings" class="console-settings" hidden novalidate>
-          <div class="settings-heading">
-            <div>
-              <h2>Удалённый сервер Element</h2>
-              <p>Нужен для доступа к Панели управления из VS Code или другого внешнего клиента.</p>
-            </div>
-            <label class="switch-label" for="console-enabled">
-              <input id="console-enabled" name="console-enabled" type="checkbox" role="switch">
-              <span>Использовать</span>
-            </label>
-          </div>
-
-          <fieldset id="console-fields" hidden>
-            <label for="console-server">HTTP-адрес сервера Element</label>
-            <input
-              id="console-server"
-              name="console-server"
-              type="url"
-              maxlength="2048"
-              autocomplete="url"
-              spellcheck="false"
-              placeholder="https://element.example/console"
-              aria-describedby="console-server-help console-error"
-            >
-            <p id="console-server-help" class="settings-help">
-              Укажите базовый адрес Console, обычно он заканчивается на <code>/console</code>.
-              Полный путь <code>/console/api/v2</code> тоже подойдёт.
-            </p>
-
-            <label for="console-client-id">Client ID</label>
-            <input
-              id="console-client-id"
-              name="console-client-id"
-              type="text"
-              maxlength="2048"
-              autocomplete="username"
-              spellcheck="false"
-              aria-describedby="console-error"
-            >
-
-            <label for="console-client-secret">Client Secret</label>
-            <input
-              id="console-client-secret"
-              name="console-client-secret"
-              type="password"
-              maxlength="8192"
-              autocomplete="new-password"
-              spellcheck="false"
-              aria-describedby="console-secret-help console-error"
-            >
-            <p id="console-secret-help" class="settings-help">
-              Секрет не возвращается в браузер или агенту после сохранения.
-            </p>
-
-            <p id="console-feedback" class="source-feedback" role="status" aria-live="polite" hidden></p>
-            <p id="console-error" class="source-error" role="alert" hidden></p>
-            <button id="console-save" class="settings-action" type="submit">
-              Проверить и сохранить
-            </button>
-          </fieldset>
-        </form>
-
-        <form id="runtime-settings" class="runtime-settings" hidden novalidate>
-          <div class="settings-heading">
-            <div>
-              <h2>Диагностика сервера Element</h2>
-              <p>Локальные состояние, место на диске и журнальные файлы экземпляра.</p>
-            </div>
-          </div>
-
-          <label for="runtime-instance-root">Каталог экземпляра сервера</label>
-          <input
-            id="runtime-instance-root"
-            name="runtime-instance-root"
-            type="text"
-            maxlength="4096"
-            autocomplete="off"
-            spellcheck="false"
-            placeholder="C:\ProgramData\1C\1CE\instances\1c-enterprise-element-server-with-ide"
-            aria-describedby="runtime-feedback runtime-error"
-          >
-
-          <p id="runtime-manager-status" class="settings-help" role="status" aria-live="polite"></p>
-
-          <p id="runtime-feedback" class="source-feedback" role="status" aria-live="polite" hidden></p>
-          <p id="runtime-error" class="source-error" role="alert" hidden></p>
-          <button id="runtime-save" class="settings-action" type="submit">Сохранить настройки</button>
-        </form>
-
-        <form id="actions-settings" class="actions-settings" hidden novalidate>
-          <div class="settings-heading">
-            <div>
-              <h2>Управляемые действия</h2>
-              <p>Разрешают агенту изменять через Console только приложение текущего workspace и связанный проект.</p>
-            </div>
-            <label class="switch-label" for="actions-enabled">
-              <input id="actions-enabled" name="actions-enabled" type="checkbox" role="switch">
-              <span>Разрешить</span>
-            </label>
-          </div>
-
-          <div id="actions-fields" hidden>
-            <fieldset class="action-selection">
-              <legend>Доступные операции</legend>
-              <label class="check-label" for="action-upload">
-                <input id="action-upload" type="checkbox" value="upload_project_assembly">
-                <span>Загружать сборки</span>
-              </label>
-              <label class="check-label" for="action-update">
-                <input id="action-update" type="checkbox" value="update_application">
-                <span>Обновлять приложения</span>
-              </label>
-              <label class="check-label" for="action-start">
-                <input id="action-start" type="checkbox" value="start_application">
-                <span>Запускать приложения</span>
-              </label>
-              <label class="check-label" for="action-stop">
-                <input id="action-stop" type="checkbox" value="stop_application">
-                <span>Останавливать приложения</span>
-              </label>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="element-mcp-token" content="{{CSRF_TOKEN}}">
+  <title>Element MCP</title>
+  <script src="/ui/theme.js"></script>
+  <link rel="stylesheet" href="/ui/styles.css">
+  <script src="/ui/app.js" defer></script>
+</head>
+<body>
+  <div class="page">
+    <header class="header">
+      <div class="brand"><h1>Element MCP</h1><span class="runtime-status" id="server-state"><span class="status-dot" aria-hidden="true"></span><span id="server-state-label">Подключение…</span></span></div>
+      <div class="header-tools">
+        <button id="theme-action" class="icon-button" type="button" aria-label="Сменить цветовую схему" data-tooltip="Сменить цветовую схему"><svg class="icon theme-sun" aria-hidden="true"><use href="/ui/icons.svg#sun"></use></svg><svg class="icon theme-moon" aria-hidden="true"><use href="/ui/icons.svg#moon"></use></svg></button>
+        <button id="restart-action" class="icon-button" type="button" aria-label="Перезапустить сервер" data-tooltip="Перезапустить сервер" aria-describedby="restart-message" disabled><svg class="icon" aria-hidden="true"><use href="/ui/icons.svg#restart"></use></svg></button>
+        <p id="restart-message" class="sr-only" hidden></p>
+      </div>
+    </header>
+    <div class="layout">
+      <aside class="sidebar"><nav aria-label="Разделы настроек">
+        <button type="button" data-page="connections" aria-current="page" aria-controls="page-connections"><svg class="icon" aria-hidden="true"><use href="/ui/icons.svg#plug"></use></svg>Подключения</button>
+        <button type="button" data-page="documentation" aria-controls="page-documentation"><svg class="icon" aria-hidden="true"><use href="/ui/icons.svg#book"></use></svg>Документация</button>
+        <button type="button" data-page="actions" aria-controls="page-actions"><svg class="icon" aria-hidden="true"><use href="/ui/icons.svg#sliders"></use></svg>Действия агента</button>
+        <button type="button" data-page="updates" aria-controls="page-updates"><svg class="icon" aria-hidden="true"><use href="/ui/icons.svg#download"></use></svg>Обновления</button>
+      </nav></aside>
+      <main class="content">
+        <section class="settings-page" id="page-connections" data-screen="connections" aria-labelledby="connections-title">
+          <div class="page-heading"><h2 id="connections-title">Подключения</h2></div>
+          <form id="console-settings" class="settings-group" novalidate>
+            <div class="settings-heading"><h3>Панель управления</h3><label class="switch-label" for="console-enabled"><span id="console-summary">Загрузка…</span><input id="console-enabled" type="checkbox" role="switch" aria-label="Подключение к панели управления" disabled></label></div>
+            <fieldset id="console-fields" disabled>
+              <div class="field"><label for="console-server">Адрес Console</label><input id="console-server" type="url" maxlength="2048" autocomplete="url" spellcheck="false" placeholder="https://element.example/console" aria-describedby="console-error"></div>
+              <div class="field"><label for="console-client-id">Client ID</label><input id="console-client-id" type="text" maxlength="2048" autocomplete="username" spellcheck="false" aria-describedby="console-error"></div>
+              <div class="field"><label for="console-client-secret">Client Secret</label><div class="password-field"><input id="console-client-secret" type="password" maxlength="8192" autocomplete="new-password" spellcheck="false" aria-describedby="console-secret-help console-error"><button id="secret-visibility" class="icon-button" type="button" aria-label="Показать Client Secret" data-tooltip="Показать Client Secret"><svg class="icon" aria-hidden="true"><use href="/ui/icons.svg#eye"></use></svg></button></div><p id="console-secret-help" class="field-note" hidden></p></div>
             </fieldset>
-
-            <p class="settings-help">
-              Приложение и проект определяет плагин Element IDE для каждого подключения.
-              Нужен плагин с поддержкой изолированных IDE-сессий. Без такого подключения запись запрещена.
-              При смене workspace подготовленные операции нужно подтвердить заново.
-            </p>
-
-            <label for="actions-upload-roots">Каталоги со сборками</label>
-            <textarea
-              id="actions-upload-roots"
-              name="actions-upload-roots"
-              rows="3"
-              maxlength="12288"
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="C:\Builds\Element"
-              aria-describedby="actions-roots-help actions-feedback actions-error"
-            ></textarea>
-            <p id="actions-roots-help" class="settings-help">
-              Агент сможет загружать ZIP-файлы только из этих каталогов. Укажите по одному полному пути в строке.
-            </p>
-
-            <p class="settings-help">
-              Перед каждой операцией MCP покажет точную цель и риски, дождётся отдельного подтверждения и выдаст
-              одноразовое разрешение на 5 минут. Запросы на изменение не повторяются автоматически.
-            </p>
-          </div>
-
-          <p id="actions-feedback" class="source-feedback" role="status" aria-live="polite" hidden></p>
-          <p id="actions-error" class="source-error" role="alert" hidden></p>
-          <button id="actions-save" class="settings-action" type="submit" hidden>Сохранить разрешения</button>
-        </form>
-
-        <div class="update-area">
-          <div class="update-copy" aria-live="polite" aria-atomic="true">
-            <h2 id="update-title">Проверяем обновления</h2>
-            <p id="update-message">Это может занять несколько секунд.</p>
-          </div>
-          <button id="update-action" type="button" disabled>
-            <span class="button-label">Проверяем…</span>
-          </button>
-          <button id="restart-action" type="button" aria-describedby="restart-message" disabled>
-            Перезапустить сервер
-          </button>
-          <p id="restart-message" class="restart-message" role="status" aria-live="polite" hidden></p>
-        </div>
-      </section>
-      <p class="endpoint">MCP endpoint: <code>/mcp</code></p>
-    </main>
-  </body>
+            <p id="console-feedback" class="sr-only" hidden></p><p id="console-error" class="sr-only" hidden></p>
+            <div class="form-actions"><button id="console-save" class="button primary" type="submit" disabled>Проверить и сохранить</button></div>
+          </form>
+          <form id="runtime-settings" class="settings-group" novalidate>
+            <div class="settings-heading"><h3>Сервер Element</h3><span id="runtime-summary" class="summary">Загрузка…</span></div>
+            <div class="field"><label for="runtime-instance-root">Каталог экземпляра</label><input id="runtime-instance-root" type="text" maxlength="4096" autocomplete="off" spellcheck="false" placeholder="C:\Element\server-instance" aria-describedby="runtime-error" disabled></div>
+            <p id="runtime-manager-status" class="field-note"></p>
+            <p id="runtime-feedback" class="sr-only" hidden></p><p id="runtime-error" class="sr-only" hidden></p>
+            <div class="form-actions"><button id="runtime-save" class="button" type="submit" disabled>Сохранить</button></div>
+          </form>
+        </section>
+        <section class="settings-page" id="page-documentation" data-screen="documentation" aria-labelledby="documentation-title" hidden>
+          <div class="page-heading"><h2 id="documentation-title">Документация</h2><span id="documentation-summary" class="summary">Загрузка…</span></div>
+          <form id="documentation-settings" novalidate>
+            <div class="field"><label for="documentation-path">Каталог документации</label><input id="documentation-path" type="text" maxlength="4096" autocomplete="off" spellcheck="false" placeholder="C:\Element\documentation" aria-describedby="documentation-help documentation-error" disabled><p id="documentation-help" class="field-note" hidden></p></div>
+            <p id="documentation-feedback" class="sr-only" hidden></p><p id="documentation-error" class="sr-only" hidden></p>
+            <div class="form-actions"><button id="documentation-activate" class="button primary" type="submit" disabled>Проверить и подключить</button></div>
+          </form>
+          <dl id="documentation-counts" class="details" hidden><div><dt>Документы</dt><dd id="documentation-documents"></dd></div><div><dt>Фрагменты</dt><dd id="documentation-chunks"></dd></div></dl>
+        </section>
+        <section class="settings-page" id="page-actions" data-screen="actions" aria-labelledby="actions-title" hidden>
+          <form id="actions-settings" novalidate>
+            <div class="page-heading"><h2 id="actions-title">Действия агента</h2><label class="switch-label" for="actions-enabled"><span id="actions-summary">Загрузка…</span><input id="actions-enabled" type="checkbox" role="switch" aria-label="Разрешить действия агента" disabled></label></div>
+            <fieldset id="actions-fields" disabled>
+              <fieldset class="action-selection"><legend class="sr-only">Доступные операции</legend>
+                <label class="check-label" for="action-upload"><input id="action-upload" type="checkbox" value="upload_project_assembly"><span>Загрузка сборки</span></label>
+                <label class="check-label" for="action-update"><input id="action-update" type="checkbox" value="update_application"><span>Обновление приложения</span></label>
+                <label class="check-label" for="action-start"><input id="action-start" type="checkbox" value="start_application"><span>Запуск приложения</span></label>
+                <label class="check-label" for="action-stop"><input id="action-stop" type="checkbox" value="stop_application"><span>Остановка приложения</span></label>
+              </fieldset>
+              <div class="field"><label for="actions-upload-roots">Каталоги сборок</label><textarea id="actions-upload-roots" rows="3" maxlength="12288" autocomplete="off" spellcheck="false" placeholder="C:\Element\builds" aria-describedby="actions-error"></textarea></div>
+            </fieldset>
+            <p id="actions-feedback" class="sr-only" hidden></p><p id="actions-error" class="sr-only" hidden></p>
+            <div class="form-actions"><button id="actions-save" class="button primary" type="submit" disabled>Сохранить</button></div>
+          </form>
+        </section>
+        <section class="settings-page" id="page-updates" data-screen="updates" aria-labelledby="updates-title" hidden>
+          <div class="page-heading"><h2 id="updates-title">Обновления</h2></div>
+          <dl class="details"><div><dt>Текущая версия</dt><dd id="server-version">—</dd></div><div><dt>Последняя версия</dt><dd id="latest-version">Не проверена</dd></div></dl>
+          <h3 id="update-title" class="sr-only"></h3><p id="update-message" class="sr-only"></p>
+          <div class="form-actions"><button id="update-action" class="button" type="button" disabled><svg class="icon" aria-hidden="true"><use href="/ui/icons.svg#refresh"></use></svg><span class="button-label">Проверяем…</span></button></div>
+          <form id="source-settings" class="settings-group source-settings" novalidate>
+            <h3>Источник обновлений</h3>
+            <div class="source-modes" aria-label="Источник обновлений"><button id="source-use-origin" type="button" aria-pressed="true">Удалённый origin</button><button id="source-use-local" type="button" aria-pressed="false">Локальный Git</button></div>
+            <div id="source-remote-field" class="field"><span class="field-label">Репозиторий</span><span id="update-source" class="source-value">—</span></div>
+            <div id="source-local-field" class="field" hidden><label for="source-path">Каталог репозитория</label><input id="source-path" type="text" maxlength="4096" autocomplete="off" spellcheck="false" placeholder="C:\Projects\1c-element-mcp" aria-describedby="source-error"></div>
+            <p id="source-feedback" class="sr-only" hidden></p><p id="source-error" class="sr-only" hidden></p>
+            <div class="form-actions" id="source-save-area" hidden><button id="source-save" class="button primary" type="submit">Сохранить и проверить</button></div>
+          </form>
+        </section>
+      </main>
+    </div>
+    <footer><span id="endpoint">/mcp</span><span id="footer-version">Element MCP</span></footer>
+  </div>
+  <div id="toasts" class="toasts" aria-label="Уведомления"></div>
+  <template id="toast-template"><div class="toast" data-kind="success"><svg class="icon toast-success" aria-hidden="true"><use href="/ui/icons.svg#check"></use></svg><svg class="icon toast-error" aria-hidden="true"><use href="/ui/icons.svg#error"></use></svg><p class="toast-message" aria-atomic="true"></p><button class="icon-button toast-close" type="button" aria-label="Закрыть уведомление"><svg class="icon" aria-hidden="true"><use href="/ui/icons.svg#close"></use></svg></button></div></template>
+</body>
 </html>

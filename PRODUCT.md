@@ -26,13 +26,13 @@ Calm, precise, and unobtrusive. The interface should feel like a dependable syst
 
 ## Anti-references
 
-Avoid data-dense dashboards, terminal cosplay, oversized metrics, decorative gradients, glass effects, card grids, and navigation that has no job on the current screen. Lack of network access is an expected operating condition, not an alarming failure.
+Avoid data-dense dashboards, terminal-like output blocks, oversized metrics, decorative gradients, glass effects, card grids, and verbose explanatory boilerplate. The approved XBSL.IO monospace settings design is the visual reference. Lack of network access is an expected operating condition, not an alarming failure.
 
 ## Design Principles
 
 - Status comes first and is stated in plain language.
 - One screen has one primary action.
-- Progressive disclosure keeps configuration out of the common path.
+- Four task-based sections keep unrelated settings out of the current view.
 - Remote Console access is optional, verified before activation, and reversible without re-entering its secret.
 - Runtime setup asks only for the Element instance directory; Application Manager discovery is automatic and
   never stores a second copy of its credentials.
