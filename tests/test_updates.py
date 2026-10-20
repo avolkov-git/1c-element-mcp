@@ -47,8 +47,9 @@ def make_update_repositories(tmp_path: Path) -> tuple[Path, Path, str]:
     return source, target, previous_commit
 
 
-def test_local_source_reports_available_update(tmp_path: Path) -> None:
+def test_local_source_reports_available_update(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     source, target, _ = make_update_repositories(tmp_path)
+    monkeypatch.setattr(updates, "__version__", "0.22.0")
     service = UpdateService(
         ServerSettings(
             data_path=tmp_path / "data",
@@ -62,6 +63,24 @@ def test_local_source_reports_available_update(tmp_path: Path) -> None:
     assert status["updates"]["state"] == "available"
     assert status["updates"]["available_version"] == "0.22.1"
     assert status["updates"]["source"]["kind"] == "local"
+
+
+def test_local_source_reports_current_for_installed_release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source, target, _ = make_update_repositories(tmp_path)
+    monkeypatch.setattr(updates, "__version__", "0.22.1")
+    service = UpdateService(
+        ServerSettings(
+            data_path=tmp_path / "data",
+            update_repository_path=target,
+            update_source_path=source,
+        )
+    )
+
+    status = service.check()
+
+    assert status["updates"]["state"] == "current"
+    assert status["updates"]["available_version"] == "0.22.1"
+    assert status["updates"]["can_apply"] is False
 
 
 def test_configure_source_persists_valid_local_repository(tmp_path: Path) -> None:

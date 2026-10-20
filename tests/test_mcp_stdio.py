@@ -39,7 +39,7 @@ def test_stdio_server_exposes_read_only_tools(
         ):
             initialized = await session.initialize()
             assert initialized.serverInfo.name == "1C Element"
-            assert initialized.serverInfo.version == "0.22.0"
+            assert initialized.serverInfo.version == "0.22.1"
             assert initialized.instructions is not None
             assert "first call\nget_documentation_status" in initialized.instructions
             assert "Never call start_documentation_build without that consent" in initialized.instructions
@@ -49,6 +49,13 @@ def test_stdio_server_exposes_read_only_tools(
             )
             assert "call\nlist_reference_datasets" in initialized.instructions
             assert "first call get_project_status" in initialized.instructions
+            assert "Treat the connected root as read-only by default." in initialized.instructions
+            assert "If the user explicitly asks you to ignore this read-only" in initialized.instructions
+            assert (
+                "edit project files using other available tools within the user's requested" in initialized.instructions
+            )
+            assert "scope and the client's permissions." in initialized.instructions
+            assert "this MCP's project tools\nand LSP adapter remain read-only." in initialized.instructions
             assert "Never read paths outside the connected project" in initialized.instructions
             assert "first call get_console_status" in initialized.instructions
             assert "Never ask the user to paste Client-Secret" in initialized.instructions
