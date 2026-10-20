@@ -11,7 +11,7 @@ from unittest.mock import Mock
 import pytest
 from starlette.testclient import TestClient
 
-from element_mcp.actions import ActionsConfiguration
+from element_mcp.actions import ActionsConfiguration, ManagedActionError
 from element_mcp.config import ServerSettings
 from element_mcp.console import ConsoleHttpClient, ConsoleRequestError
 from element_mcp.ide_sessions import (
@@ -66,6 +66,8 @@ def running(tmp_path, element_project_path, monkeypatch):
             return []
         if path.endswith("/status"):
             return {"status": "Stopped", "current-task": None}
+        if path.startswith("/api/v2/projects/"):
+            return {"id": path.rsplit("/", 1)[-1], "group-id": None}
         app_id = path.rsplit("/", 1)[-1]
         assert app_id in projects, path
         return {
@@ -183,6 +185,57 @@ def test_actual_http_routes_two_workspaces_and_confirmations(running):
             "application_id": APP_A,
         },
     )["isError"]
+
+
+def test_group_ide_keeps_application_scope_and_rechecks_membership(running, monkeypatch):
+    r = running
+    original = ConsoleHttpClient.get
+    group_id = "99999999-9999-4999-8999-999999999999"
+    space_id = "88888888-8888-4888-8888-888888888888"
+    member = [True]
+
+    def get(self, connection, path):
+        if path == f"/api/v2/projects/{PROJECT_A}":
+            return {"id": PROJECT_A, "group-id": group_id if member[0] else None, "space-id": space_id}
+        if path == f"/api/v2/projects/{group_id}":
+            return {"id": group_id, "project-kind": "Group", "space-id": space_id}
+        return original(self, connection, path)
+
+    monkeypatch.setattr(ConsoleHttpClient, "get", get)
+    response = r.client.post(
+        "/api/integrations/ide-sessions", headers=r.headers, json=payload(group_id, APP_A, r.root_a)
+    )
+    assert response.status_code == 201, response.text
+    session = response.json()
+    token = session["mcp_token"]
+    current = call(r.client, token, "get_current_application")
+    assert current["project_match_kind"] == "group"
+    assert current["application_project_id"] == PROJECT_A
+    assert current["application_project_group_id"] == group_id
+    assert call(r.client, token, "get_project_status")["path"] == str(r.root_a)
+    actions = r.server.ide_sessions.for_mcp(token).bundle.actions
+    assert actions._selected_target(None, "project_id") == PROJECT_A
+    ActionsConfiguration(r.settings).configure(
+        enabled=True, allowed_actions=["start_application", "upload_project_assembly"], upload_roots=[str(r.root_a)]
+    )
+    actions._authorize("upload_project_assembly", project_id=PROJECT_A)
+    for wrong_project in (group_id, PROJECT_B):
+        with pytest.raises(ManagedActionError, match="не принадлежит приложению"):
+            actions._authorize("upload_project_assembly", project_id=wrong_project)
+    prepared = call(r.client, token, "prepare_application_state_change", {"desired_state": "start"})
+    assert rpc(
+        r.client,
+        token,
+        "prepare_application_state_change",
+        {
+            "desired_state": "start",
+            "application_id": APP_B,
+        },
+    )["isError"]
+    member[0] = False
+    assert not call(r.client, token, "get_current_application")["matches_ide_project"]
+    assert rpc(r.client, token, "start_application", {"approval_token": prepared["approval_token"]})["isError"]
+    assert not r.writes
 
 
 def test_concurrent_http_clients_keep_context(running):

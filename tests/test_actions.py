@@ -364,7 +364,7 @@ def test_wait_console_task_returns_last_state_at_bounded_timeout(tmp_path: Path)
 
 
 def test_policy_is_default_deny_and_requires_exact_uuid(tmp_path: Path) -> None:
-    service = _service(tmp_path, lambda *args: _project())
+    service = _service(tmp_path, lambda method, url, *args: _application() if "/applications/" in url else _project())
 
     assert service.configuration_info()["status"] == "disabled"
     with pytest.raises(ManagedActionError, match="выключены"):

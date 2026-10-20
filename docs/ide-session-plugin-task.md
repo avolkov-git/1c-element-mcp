@@ -233,7 +233,7 @@ env_http_headers = { "X-Element-IDE-Session" = "ELEMENT_IDE_MCP_SESSION_TOKEN" }
 | `console_application_failed` | 401, 403 или 502 | Не удалось прочитать и проверить точную карточку приложения |
 | `application_project_missing` | 400 | В карточке нет ID проекта в `project.id` или `source.image-id` |
 | `application_project_invalid` | 400 | ID проекта из карточки не является UUID |
-| `application_project_mismatch` | 400 | UUID проекта приложения отличается от штатного `1C.projectId` |
+| `application_project_mismatch` | 400 | Не подтверждены ни точное совпадение проекта приложения с `1C.projectId`, ни его членство в группе текущей IDE |
 
 Поле `http_status` содержит исходный HTTP-статус Console либо `null`, если HTTP-статуса нет.
 Например, HTTP 404 от Console возвращается как HTTP 502 от MCP, с `code=console_application_failed`
@@ -249,6 +249,25 @@ credentials и локальных путей. Клиенту следует со
 IDE-контекст разрешается до чтения любых общих источников. Повреждённый `console.json`, настройки другой
 IDE или переменные окружения не участвуют в выборе соединения сессии. Некорректный IDE-контекст
 отклоняется без fallback на общие credentials; уже открытые сессии при отказе не заменяются.
+
+#### IDE группы проектов
+
+В версии 0.23.2 поддержана штатная модель Element 9.2.4-6:
+`1C.projectId` может обозначать группу, а `project.id` приложения — её проект-участник.
+Для такой связи MCP читает обе карточки проектов и проверяет `group-id`, тип `Group`,
+отсутствие удаления и одинаковое пространство. `parent-id`, имена и пути не заменяют эту проверку.
+Ошибки чтения карточек возвращаются как ошибки Console, а не как подтверждённое несовпадение.
+
+`get_current_application` дополнительно возвращает `project_match_kind` (`exact`, `group` или `null`)
+и `application_project_group_id` (подтверждённый ID группы только для `group`).
+Плагин должен проверять исходные ID IDE и приложения, `matches_ide_project=true` и либо точное
+совпадение проекта, либо `project_match_kind=group` с правильным `application_project_group_id`.
+Для project-scoped действий целью остаётся конкретный `application_project_id`, а не вся группа.
+
+Для чтения исходников процесс MCP должен иметь доступ к workspace от имени владельца файлов IDE
+и видеть те же абсолютные пути. Read-only bind mount не предоставляет отсутствующие Unix-права.
+Ошибка обхода каталога теперь диагностируется отдельно от отсутствующего проекта.
+Для IDE группы проектов нужны MCP 0.23.2 и плагин Codex Element 1.0.5-rc6 или новее.
 
 ## Lifecycle
 

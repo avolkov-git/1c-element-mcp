@@ -127,6 +127,17 @@ def test_connect_rejects_a_regular_directory(tmp_path: Path) -> None:
         service(tmp_path).connect(directory)
 
 
+def test_ide_workspace_reports_unreadable_directory(tmp_path, monkeypatch):
+    def denied_walk(root, *, followlinks, onerror):
+        onerror(PermissionError("synthetic private path"))
+        return iter(())
+
+    monkeypatch.setattr("element_mcp.project.os.walk", denied_walk)
+    with pytest.raises(ProjectError, match="Проверьте права процесса MCP") as error:
+        service(tmp_path).prepare_ide_workspace({"workspace_folders": [str(tmp_path)]})
+    assert "synthetic private path" not in str(error.value)
+
+
 def test_ide_workspace_uses_official_git_context_and_requires_project_selection(
     tmp_path: Path,
     element_project_path: Path,

@@ -498,6 +498,83 @@ def test_current_application_uses_only_exact_ide_session_context(tmp_path: Path)
     assert "ide-token" not in json.dumps(result)
 
 
+@pytest.mark.parametrize(
+    ("variant", "expected", "status"),
+    [
+        ("group", True, "ready"),
+        ("unrelated", False, "ready"),
+        ("parent_only", False, "ready"),
+        ("wrong_kind", False, "ready"),
+        ("different_space", False, "ready"),
+        ("missing_space", False, "ready"),
+        ("deleted_project", False, "ready"),
+        ("deleted_group", False, "ready"),
+        ("wrong_project_response", None, "unavailable"),
+        ("wrong_group_response", None, "unavailable"),
+        ("project_forbidden", None, "forbidden"),
+        ("group_not_found", None, "not_found"),
+    ],
+)
+def test_current_application_validates_official_project_group(tmp_path, variant, expected, status):
+    group_id = "99999999-9999-4999-8999-999999999999"
+    project = project_response(PROJECT_ID, "Проект", space_id=SPACE_ID)
+    project["group-id"] = group_id
+    group = project_response(group_id, "Группа", space_id=SPACE_ID)
+    group["project-kind"] = "Group"
+    if variant in {"unrelated", "parent_only"}:
+        project["group-id"] = None
+        project["parent-id"] = group_id if variant == "parent_only" else None
+    elif variant == "wrong_kind":
+        group["project-kind"] = "Application"
+    elif variant == "different_space":
+        group["space-id"] = "88888888-8888-4888-8888-888888888888"
+    elif variant == "missing_space":
+        project["space-id"] = group["space-id"] = None
+    elif variant == "deleted_project":
+        project["deleted"] = True
+    elif variant == "deleted_group":
+        group["deleted"] = True
+    elif variant == "wrong_project_response":
+        project["id"] = group_id
+    elif variant == "wrong_group_response":
+        group["id"] = PROJECT_ID
+
+    def requester(method, url, headers, body, context, timeout):
+        if url.endswith("/api/v2/spaces"):
+            return [space_response(SPACE_ID, "Основное")]
+        if url.endswith(f"/api/v2/applications/{APPLICATION_ID}"):
+            return application_response(APPLICATION_ID, project_id=PROJECT_ID)
+        if url.endswith(f"/api/v2/projects/{PROJECT_ID}"):
+            if variant == "project_forbidden":
+                raise ConsoleRequestError("Forbidden", status_code=403)
+            return project
+        if url.endswith(f"/api/v2/projects/{group_id}"):
+            if variant == "group_not_found":
+                raise ConsoleRequestError("Not found", status_code=404)
+            return group
+        raise AssertionError(url)
+
+    service = ConsoleService(
+        ServerSettings(config_path=tmp_path / "config.json"),
+        client=ConsoleHttpClient(requester=requester),
+    )
+    service.configure_ide_session(
+        {
+            "server": "https://element.example/console",
+            "access_token": "ide-token",
+            "project_id": group_id,
+            "application_id": APPLICATION_ID,
+        }
+    )
+    result = service.get_current_application()
+    assert result["status"] == status
+    assert result.get("matches_ide_project") is expected
+    assert result.get("project_match_kind") == ("group" if expected else None)
+    if expected:
+        assert result["ide_project_id"] == group_id
+        assert result["application_project_id"] == PROJECT_ID
+
+
 def test_current_application_is_not_inferred_for_vscode_or_standalone_console(tmp_path: Path) -> None:
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(

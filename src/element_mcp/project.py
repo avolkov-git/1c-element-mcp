@@ -609,8 +609,17 @@ class ProjectService:
     def _discover_project_roots(workspace_folders: tuple[Path, ...]) -> list[Path]:
         candidates: list[Path] = []
         directories_scanned = 0
+
+        def unreadable(error: OSError) -> None:
+            raise ProjectError(
+                "MCP не удалось прочитать каталог workspace. Проверьте права процесса MCP "
+                "и доступность файлов IDE в его контейнере."
+            ) from error
+
         for workspace_root in workspace_folders:
-            for directory, directory_names, file_names in os.walk(workspace_root, followlinks=False):
+            for directory, directory_names, file_names in os.walk(
+                workspace_root, followlinks=False, onerror=unreadable
+            ):
                 directories_scanned += 1
                 if directories_scanned > MAX_WORKSPACE_DIRECTORIES:
                     raise ProjectError(

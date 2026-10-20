@@ -48,7 +48,7 @@ def test_ui_reports_running_server_and_protects_mutations(tmp_path: Path) -> Non
 
         status = client.get("/api/status")
         assert status.status_code == 200
-        assert status.json()["server"] == {"state": "running", "version": "0.23.1"}
+        assert status.json()["server"] == {"state": "running", "version": "0.23.2"}
         assert status.json()["restart"]["can_restart"] is False
 
         assert client.post("/api/updates/check").status_code == 403

@@ -596,17 +596,18 @@ class ConsoleService:
             application_id = _validate_uuid(connection.application_id, "application_id")
             application = self._application(connection, application_id)
             application_project_id = _application_project_id(application)
+            project_match = self._ide_project_match(connection, application_project_id)
             return {
                 "status": "ready",
                 "connection": connection.public_info(),
                 "application": application,
                 "ide_project_id": connection.project_id,
                 "application_project_id": application_project_id,
-                "matches_ide_project": (
-                    _same_uuid(application_project_id, connection.project_id)
-                    if application_project_id and connection.project_id
-                    else None
-                ),
+                "matches_ide_project": project_match is not None
+                if application_project_id and connection.project_id
+                else None,
+                "project_match_kind": project_match,
+                "application_project_group_id": connection.project_id if project_match == "group" else None,
                 "message": "Получена карточка опубликованного приложения, связанного с текущей Element IDE",
             }
         except ConsoleConfigurationError as error:
@@ -985,10 +986,33 @@ class ConsoleService:
             "spaces": spaces,
         }
 
+    def _ide_project_match(self, connection: ConsoleConnection, application_project_id: str | None) -> str | None:
+        if not application_project_id or not connection.project_id:
+            return None
+        if _same_uuid(application_project_id, connection.project_id):
+            return "exact"
+        # Element 9.2.4 GetApplicationData opens the project's group in the IDE.
+        # Only the authoritative group-id relation is valid, not parent-id or a matching name.
+        if not _same_uuid(application_project_id, application_project_id):
+            return None
+        project = self._project(connection, str(uuid.UUID(application_project_id.strip())))
+        if project["deleted"] or not _same_uuid(project["group_id"], connection.project_id):
+            return None
+        group = self._project(connection, _validate_uuid(connection.project_id, "project_id"))
+        if (
+            group["deleted"]
+            or group["project_kind"] != "Group"
+            or not _same_uuid(project["space_id"], group["space_id"])
+        ):
+            return None
+        return "group"
+
     def _project(self, connection: ConsoleConnection, project_id: str) -> dict[str, Any]:
         value = self.client.get(connection, f"/api/v2/projects/{project_id}")
         if not isinstance(value, dict):
             raise ConsoleRequestError("Панель управления вернула некорректное описание проекта")
+        if not _same_uuid(value.get("id"), project_id):
+            raise ConsoleRequestError("Панель управления вернула описание другого проекта")
         return _project_payload(value)
 
     def _application(self, connection: ConsoleConnection, application_id: str) -> dict[str, Any]:

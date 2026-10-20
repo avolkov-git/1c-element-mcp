@@ -541,13 +541,15 @@ class ManagedActionsService:
             self.ide_session.require_active()
         except IdeSessionError as error:
             raise ManagedActionError(str(error)) from error
-        if project_id is not None and _uuid(project_id, "project_id") != self.ide_session.project_id:
-            raise ManagedActionError("project_id не принадлежит текущей IDE-сессии")
         if application_id is not None and _uuid(application_id, "application_id") != self.ide_session.application_id:
             raise ManagedActionError("application_id не принадлежит текущей IDE-сессии")
         current = self.console.get_current_application()
         if current.get("status") != "ready" or current.get("matches_ide_project") is not True:
             raise ManagedActionError("Console больше не подтверждает связь приложения с проектом текущей IDE")
+        if project_id is not None and _uuid(project_id, "project_id") != _uuid(
+            current.get("application_project_id"), "application_project_id"
+        ):
+            raise ManagedActionError("project_id не принадлежит приложению текущей IDE-сессии")
         connection = current.get("connection", {})
         if (
             connection.get("project_id") != self.ide_session.project_id
@@ -561,6 +563,11 @@ class ManagedActionsService:
             return _uuid(supplied, field)
         if self.ide_session is None:
             raise ManagedActionError("Нет изолированной IDE-сессии для автоматического выбора цели")
+        if field == "project_id":
+            current = self.console.get_current_application()
+            if current.get("status") != "ready" or current.get("matches_ide_project") is not True:
+                raise ManagedActionError("Console не подтвердила проект приложения текущей IDE")
+            return _uuid(current.get("application_project_id"), "application_project_id")
         return getattr(self.ide_session, field)
 
     def _issue(
