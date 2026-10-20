@@ -27,13 +27,15 @@ def write_version(path: Path, version: str) -> None:
     )
 
 
-def make_update_repositories(tmp_path: Path) -> tuple[Path, Path, str]:
+def make_update_repositories(
+    tmp_path: Path, installed_version: str = "0.22.0", candidate_version: str = "0.22.1"
+) -> tuple[Path, Path, str]:
     source = tmp_path / "source"
     source.mkdir()
     git(source, "init", "-b", "master")
     git(source, "config", "user.email", "test@example.invalid")
     git(source, "config", "user.name", "Test")
-    write_version(source, "0.22.0")
+    write_version(source, installed_version)
     git(source, "add", "pyproject.toml")
     git(source, "commit", "-m", "initial")
 
@@ -41,15 +43,21 @@ def make_update_repositories(tmp_path: Path) -> tuple[Path, Path, str]:
     subprocess.run(["git", "clone", "--quiet", str(source), str(target)], check=True)
     previous_commit = git(target, "rev-parse", "HEAD")
 
-    write_version(source, "0.22.1")
+    write_version(source, candidate_version)
     git(source, "add", "pyproject.toml")
     git(source, "commit", "-m", "update")
     return source, target, previous_commit
 
 
-def test_local_source_reports_available_update(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    source, target, _ = make_update_repositories(tmp_path)
-    monkeypatch.setattr(updates, "__version__", "0.22.0")
+@pytest.mark.parametrize(
+    ("installed_version", "candidate_version"),
+    [("0.22.0", "0.22.1"), ("0.22.0", "0.23.0"), ("0.22.1", "0.23.0")],
+)
+def test_local_source_reports_available_update(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, installed_version: str, candidate_version: str
+) -> None:
+    source, target, _ = make_update_repositories(tmp_path, installed_version, candidate_version)
+    monkeypatch.setattr(updates, "__version__", installed_version)
     service = UpdateService(
         ServerSettings(
             data_path=tmp_path / "data",
@@ -61,13 +69,16 @@ def test_local_source_reports_available_update(tmp_path: Path, monkeypatch: pyte
     status = service.check()
 
     assert status["updates"]["state"] == "available"
-    assert status["updates"]["available_version"] == "0.22.1"
+    assert status["updates"]["available_version"] == candidate_version
     assert status["updates"]["source"]["kind"] == "local"
 
 
-def test_local_source_reports_current_for_installed_release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    source, target, _ = make_update_repositories(tmp_path)
-    monkeypatch.setattr(updates, "__version__", "0.22.1")
+@pytest.mark.parametrize("release_version", ["0.22.1", "0.23.0"])
+def test_local_source_reports_current_for_installed_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, release_version: str
+) -> None:
+    source, target, _ = make_update_repositories(tmp_path, candidate_version=release_version)
+    monkeypatch.setattr(updates, "__version__", release_version)
     service = UpdateService(
         ServerSettings(
             data_path=tmp_path / "data",
@@ -79,7 +90,7 @@ def test_local_source_reports_current_for_installed_release(tmp_path: Path, monk
     status = service.check()
 
     assert status["updates"]["state"] == "current"
-    assert status["updates"]["available_version"] == "0.22.1"
+    assert status["updates"]["available_version"] == release_version
     assert status["updates"]["can_apply"] is False
 
 

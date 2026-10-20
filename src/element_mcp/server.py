@@ -12,6 +12,8 @@ from element_mcp.config import ServerSettings
 from element_mcp.console import ConsoleService
 from element_mcp.documentation import DocumentationService
 from element_mcp.graph import ProjectGraphService
+from element_mcp.ide_services import IdeServices
+from element_mcp.ide_sessions import IdeSessionRegistry, RoutedService, SessionFastMCP
 from element_mcp.installation import discover_element_installations as find_element_installations
 from element_mcp.language_server import LanguageServerService
 from element_mcp.project import ProjectService
@@ -150,7 +152,10 @@ source and gaps and never correlate entries merely because their text looks simi
 bounded and redacted.
 
 For managed Console writes, first call get_managed_actions_status. These actions are disabled by default and
-restricted by exact project/application UUID allowlists configured in the local UI. Always call the matching
+restricted to the application and project of this client's isolated IDE session. Never infer a target from
+folder names or use another client's context. If workspace_scope is missing or expired, ask the user to update
+or reconnect the Element plugin; do not fall back to arbitrary UUIDs. Target IDs may be omitted to use this
+session. Workspace changes require a new session and new prepare tokens. Always call the matching
 prepare tool first. Show its exact action, target, risks, and expiration to the user, then wait for a new explicit
 confirmation in a later turn. Never treat a request to inspect or prepare as permission to execute. After that
 confirmation, pass the one-time approval token only to the matching execute tool. A consumed or expired token is
@@ -170,7 +175,10 @@ def create_server(settings: ServerSettings) -> FastMCP:
     runtime = RuntimeDiagnosticsService(settings, console)
     actions = ManagedActionsService(settings, console)
     updates = UpdateService(settings)
-    server = FastMCP(
+    sessions = IdeSessionRegistry(
+        lambda session, payload: IdeServices.create(settings, documentation, session, payload)
+    )
+    server = SessionFastMCP(
         name="1C Element",
         instructions=SERVER_INSTRUCTIONS,
         host=settings.host,
@@ -181,7 +189,16 @@ def create_server(settings: ServerSettings) -> FastMCP:
     # FastMCP 1.x does not expose the low-level server version in its constructor.
     # Without this assignment clients would see the SDK version instead of our SemVer.
     server._mcp_server.version = __version__
+    server.ide_sessions = sessions
     register_ui(server, settings, updates, documentation, console, project, runtime, actions)
+    # UI administration is deliberately global. MCP tools below are routed by the transport capability.
+    project = RoutedService("project", project)
+    graph = RoutedService("graph", graph)
+    semantic = RoutedService("semantic", semantic)
+    language_server = RoutedService("language_server", language_server)
+    console = RoutedService("console", console)
+    runtime = RoutedService("runtime", runtime)
+    actions = RoutedService("actions", actions)
 
     @server.tool(annotations=READ_ONLY, structured_output=True)
     def get_corpus_info() -> dict[str, Any]:
@@ -424,11 +441,11 @@ def create_server(settings: ServerSettings) -> FastMCP:
 
     @server.tool(annotations=LOCAL_WRITE, structured_output=True)
     def prepare_upload_project_assembly(
-        project_id: Annotated[str, Field(min_length=1, max_length=64)],
         file_path: Annotated[str, Field(min_length=1, max_length=4096)],
+        project_id: Annotated[str | None, Field(min_length=1, max_length=64)] = None,
         expected_configuration_id: Annotated[str | None, Field(max_length=64)] = None,
     ) -> dict[str, Any]:
-        """Validate an allowlisted local assembly and return an exact preview; this never uploads it."""
+        """Prepare an assembly for the current IDE project; never uploads. Omit project_id to use the bound session."""
         return actions.prepare_upload_project_assembly(
             project_id=project_id,
             file_path=file_path,
@@ -444,11 +461,11 @@ def create_server(settings: ServerSettings) -> FastMCP:
 
     @server.tool(annotations=LOCAL_WRITE, structured_output=True)
     def prepare_update_application(
-        application_id: Annotated[str, Field(min_length=1, max_length=64)],
-        project_id: Annotated[str, Field(min_length=1, max_length=64)],
         assembly_version: Annotated[str, Field(min_length=1, max_length=300)],
+        application_id: Annotated[str | None, Field(min_length=1, max_length=64)] = None,
+        project_id: Annotated[str | None, Field(min_length=1, max_length=64)] = None,
     ) -> dict[str, Any]:
-        """Resolve an allowlisted application and assembly into a preview; this never updates the application."""
+        """Prepare an update of the current IDE application; explicit IDs must match its bound session."""
         return actions.prepare_update_application(
             application_id=application_id,
             project_id=project_id,
@@ -464,10 +481,10 @@ def create_server(settings: ServerSettings) -> FastMCP:
 
     @server.tool(annotations=LOCAL_WRITE, structured_output=True)
     def prepare_application_state_change(
-        application_id: Annotated[str, Field(min_length=1, max_length=64)],
         desired_state: Literal["start", "stop"],
+        application_id: Annotated[str | None, Field(min_length=1, max_length=64)] = None,
     ) -> dict[str, Any]:
-        """Return an exact start/stop preview for an allowlisted application; this never changes its state."""
+        """Prepare start/stop for the current IDE application; omit application_id to use the bound session."""
         return actions.prepare_application_state_change(
             application_id=application_id,
             desired_state=desired_state,

@@ -47,8 +47,6 @@ const actionsSettings = document.querySelector("#actions-settings");
 const actionsEnabled = document.querySelector("#actions-enabled");
 const actionsFields = document.querySelector("#actions-fields");
 const actionInputs = [...document.querySelectorAll(".action-selection input[type='checkbox']")];
-const actionsProjectIds = document.querySelector("#actions-project-ids");
-const actionsApplicationIds = document.querySelector("#actions-application-ids");
 const actionsUploadRoots = document.querySelector("#actions-upload-roots");
 const actionsFeedback = document.querySelector("#actions-feedback");
 const actionsError = document.querySelector("#actions-error");
@@ -404,7 +402,7 @@ async function saveRuntimeConfiguration() {
 function showActionsError(value, invalidField = null) {
   actionsError.textContent = value;
   actionsError.hidden = !value;
-  for (const input of [actionsProjectIds, actionsApplicationIds, actionsUploadRoots]) {
+  for (const input of [actionsUploadRoots]) {
     input.setAttribute("aria-invalid", input === invalidField ? "true" : "false");
   }
 }
@@ -420,8 +418,6 @@ function setActionsBusy(value, label = "") {
   for (const input of [
     actionsEnabled,
     ...actionInputs,
-    actionsProjectIds,
-    actionsApplicationIds,
     actionsUploadRoots,
     actionsSave,
   ]) {
@@ -439,8 +435,6 @@ function renderActionsConfiguration(payload) {
   const allowed = new Set(payload.allowed_actions || []);
   actionsEnabled.checked = Boolean(payload.enabled);
   for (const input of actionInputs) input.checked = allowed.has(input.value);
-  actionsProjectIds.value = (payload.allowed_project_ids || []).join("\n");
-  actionsApplicationIds.value = (payload.allowed_application_ids || []).join("\n");
   actionsUploadRoots.value = (payload.upload_roots || []).join("\n");
   actionsFields.hidden = !payload.enabled;
   actionsSave.hidden = !payload.enabled;
@@ -451,9 +445,14 @@ function renderActionsConfiguration(payload) {
         ? `Включены · ${allowed.size} оп.`
         : "Выключены";
   actionsSummary.title = payload.enabled
-    ? "Разрешены только перечисленные операции и UUID"
+    ? "Разрешены выбранные операции только для приложения текущей IDE-сессии"
     : "Запись в Console запрещена";
   actionsToggle.textContent = actionsSettings.hidden ? "Настроить" : "Скрыть";
+  if (payload.migration_required) {
+    showActionsFeedback(
+      "Ручные UUID-списки больше не используются. Действия выключены: проверьте операции и включите доступ к текущему workspace заново.",
+    );
+  }
 }
 
 async function loadActionsConfiguration() {
@@ -467,27 +466,13 @@ async function loadActionsConfiguration() {
 
 function validateActionsForm() {
   const selected = actionInputs.filter((input) => input.checked).map((input) => input.value);
-  const projectIds = parseLines(actionsProjectIds.value);
-  const applicationIds = parseLines(actionsApplicationIds.value);
   const uploadRoots = parseLines(actionsUploadRoots.value);
   if (!selected.length) return ["Выберите хотя бы одну операцию.", null];
   if (
     selected.includes("upload_project_assembly") &&
-    (!projectIds.length || !uploadRoots.length)
+    !uploadRoots.length
   ) {
-    return ["Для загрузки укажите UUID проекта и каталог со сборками.", !projectIds.length ? actionsProjectIds : actionsUploadRoots];
-  }
-  if (
-    selected.includes("update_application") &&
-    (!projectIds.length || !applicationIds.length)
-  ) {
-    return ["Для обновления укажите UUID проекта и приложения.", !projectIds.length ? actionsProjectIds : actionsApplicationIds];
-  }
-  if (
-    (selected.includes("start_application") || selected.includes("stop_application")) &&
-    !applicationIds.length
-  ) {
-    return ["Для запуска или остановки укажите UUID приложения.", actionsApplicationIds];
+    return ["Для загрузки укажите каталог со сборками.", actionsUploadRoots];
   }
   return [null, null];
 }
@@ -504,7 +489,7 @@ async function saveActionsConfiguration(enabled = true) {
     }
   }
   showActionsFeedback(
-    enabled ? "Проверяем UUID, каталоги и сохраняем ограничения…" : "Запрещаем действия агента…",
+    enabled ? "Проверяем каталоги и сохраняем разрешения…" : "Запрещаем действия агента…",
     "loading",
   );
   setActionsBusy(true, enabled ? "Сохраняем…" : "Выключаем…");
@@ -515,8 +500,6 @@ async function saveActionsConfiguration(enabled = true) {
       body: JSON.stringify({
         enabled,
         allowed_actions: actionInputs.filter((input) => input.checked).map((input) => input.value),
-        allowed_project_ids: parseLines(actionsProjectIds.value),
-        allowed_application_ids: parseLines(actionsApplicationIds.value),
         upload_roots: parseLines(actionsUploadRoots.value),
         max_upload_bytes: actionsConfiguration?.max_upload_bytes || 512 * 1024 * 1024,
         approval_ttl_seconds: actionsConfiguration?.approval_ttl_seconds || 300,
@@ -526,7 +509,7 @@ async function saveActionsConfiguration(enabled = true) {
     showActionsFeedback(
       enabled
         ? "Разрешения сохранены. Каждое действие всё равно потребует отдельного подтверждения."
-        : "Действия агента выключены. Сохранённые списки можно включить снова.",
+        : "Действия агента выключены. Сохранённые разрешения можно включить снова.",
       "success",
     );
   } catch (error) {
@@ -916,7 +899,11 @@ actionsToggle.addEventListener("click", () => {
   actionsToggle.setAttribute("aria-expanded", String(open));
   actionsToggle.textContent = open ? "Скрыть" : "Настроить";
   if (open) {
-    showActionsFeedback("");
+    showActionsFeedback(
+      actionsConfiguration?.migration_required
+        ? "Ручные UUID-списки больше не используются. Действия выключены: проверьте операции и включите доступ к текущему workspace заново."
+        : "",
+    );
     showActionsError(actionsConfiguration?.status === "invalid" ? actionsConfiguration.message : "");
     actionsEnabled.focus();
   }
@@ -928,7 +915,7 @@ actionsEnabled.addEventListener("change", () => {
     actionsSave.hidden = false;
     showActionsError("");
     showActionsFeedback(
-      "Выберите операции и точные цели, затем сохраните разрешения.",
+      "Выберите операции для приложения текущего workspace, затем сохраните разрешения.",
       "pending",
     );
     actionInputs[0]?.focus();

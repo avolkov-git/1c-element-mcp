@@ -48,7 +48,7 @@ def test_ui_reports_running_server_and_protects_mutations(tmp_path: Path) -> Non
 
         status = client.get("/api/status")
         assert status.status_code == 200
-        assert status.json()["server"] == {"state": "running", "version": "0.22.1"}
+        assert status.json()["server"] == {"state": "running", "version": "0.23.0"}
         assert status.json()["restart"]["can_restart"] is False
 
         assert client.post("/api/updates/check").status_code == 403
@@ -79,8 +79,6 @@ def test_ui_configures_default_deny_managed_actions(tmp_path: Path) -> None:
     payload = {
         "enabled": True,
         "allowed_actions": ["upload_project_assembly", "stop_application"],
-        "allowed_project_ids": ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"],
-        "allowed_application_ids": ["cccccccc-cccc-cccc-cccc-cccccccccccc"],
         "upload_roots": [str(upload_root)],
         "max_upload_bytes": 64 * 1024 * 1024,
         "approval_ttl_seconds": 300,
@@ -121,7 +119,8 @@ def test_ui_configures_default_deny_managed_actions(tmp_path: Path) -> None:
 
     persisted = json.loads(actions_config.read_text(encoding="utf-8"))
     assert persisted["enabled"] is False
-    assert persisted["allowed_project_ids"] == ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"]
+    assert persisted["target_scope"] == "current_ide_session"
+    assert "allowed_project_ids" not in persisted
 
 
 def test_ui_can_persist_local_update_source(tmp_path: Path) -> None:
@@ -284,7 +283,7 @@ def test_ui_configures_runtime_with_automatic_application_manager(tmp_path: Path
         assert "application_manager" not in runtime_config.read_text(encoding="utf-8")
 
 
-def test_ui_accepts_verified_ide_handoff_without_returning_secret(
+def test_ui_rejects_legacy_unscoped_handoff(
     tmp_path: Path,
     monkeypatch,
     element_project_path: Path,
@@ -326,23 +325,17 @@ def test_ui_accepts_verified_ide_handoff_without_returning_secret(
             headers={"X-Element-MCP-Token": token},
         )
 
-        assert response.status_code == 200
-        assert response.json()["connection"]["source"] == "ide_session"
-        assert response.json()["workspace"]["status"] == "ready"
-        assert response.json()["workspace"]["selected_path"] == str(element_project_path.resolve())
-        assert response.json()["workspace"]["git"]["source"] == "g5rt.team.status"
+        assert response.status_code == 426
+        assert response.json()["status"] == "upgrade_required"
         assert "ide-secret" not in response.text
-        assert captured["client_secret"] == "ide-secret"
-        assert captured["application_id"] == "cccccccc-cccc-cccc-cccc-cccccccccccc"
+        assert captured == {}
 
         unavailable_workspace = client.post(
             "/api/integrations/element-console",
             json={**payload, "workspace_folders": [str(tmp_path / "missing-workspace")]},
             headers={"X-Element-MCP-Token": token},
         )
-        assert unavailable_workspace.status_code == 200
-        assert unavailable_workspace.json()["status"] == "ready"
-        assert unavailable_workspace.json()["workspace"]["status"] == "invalid"
+        assert unavailable_workspace.status_code == 426
 
 
 def test_ui_configures_and_disables_remote_element_without_returning_secret(

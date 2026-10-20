@@ -14,7 +14,7 @@ The primary user is the owner or administrator of a 1C:Enterprise.Element server
 
 ## Product Purpose
 
-1C Element MCP gives AI agents local, version-aware access to Element documentation, project tooling, and an optional remote Management Console. Operators can grant a small set of Console changes for exact projects and applications. Its web surface reports whether MCP is running, configures protected connections and permissions, and applies safe updates from a trusted Git source.
+1C Element MCP gives AI agents local, version-aware access to Element documentation, project tooling, and an optional remote Management Console. Operators can grant a small set of Console changes for the application and linked project of each isolated IDE session. Its web surface reports whether MCP is running, configures protected connections and permissions, and applies safe updates from a trusted Git source.
 
 ## Positioning
 
@@ -36,7 +36,7 @@ Avoid data-dense dashboards, terminal cosplay, oversized metrics, decorative gra
 - Remote Console access is optional, verified before activation, and reversible without re-entering its secret.
 - Runtime setup asks only for the Element instance directory; Application Manager discovery is automatic and
   never stores a second copy of its credentials.
-- Console writes stay disabled until the operator selects exact actions, project UUIDs, and application UUIDs.
+- Console writes stay disabled until the operator selects actions; targets come from a validated isolated IDE session, never manual UUID lists or folder-name guesses.
 - A user-selected local source turns checking and applying an update into one deliberate action.
 - A secondary restart action reuses the Windows service boundary and never implies a code update.
 - Offline and closed-network states stay honest and actionable.

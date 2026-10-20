@@ -26,6 +26,7 @@ from element_mcp.console import (
     _read_settings_file,
     _write_console_settings,
 )
+from element_mcp.ide_sessions import IdeSession, IdeSessionError
 
 ActionName = Literal[
     "upload_project_assembly",
@@ -73,8 +74,6 @@ class ManagedActionError(ValueError):
 class ActionPolicy:
     enabled: bool
     allowed_actions: frozenset[ActionName]
-    allowed_project_ids: frozenset[str]
-    allowed_application_ids: frozenset[str]
     upload_roots: tuple[Path, ...]
     max_upload_bytes: int
     approval_ttl_seconds: int
@@ -83,8 +82,7 @@ class ActionPolicy:
         return {
             "enabled": self.enabled,
             "allowed_actions": sorted(self.allowed_actions),
-            "allowed_project_ids": sorted(self.allowed_project_ids),
-            "allowed_application_ids": sorted(self.allowed_application_ids),
+            "target_scope": "current_ide_session",
             "upload_roots": [str(path) for path in self.upload_roots],
             "max_upload_bytes": self.max_upload_bytes,
             "approval_ttl_seconds": self.approval_ttl_seconds,
@@ -104,6 +102,7 @@ class PreparedAction:
     request: dict[str, Any]
     precondition: dict[str, Any]
     policy_fingerprint: str
+    session_id: str
     prepared_at: float
     expires_at: float
 
@@ -117,8 +116,6 @@ class ActionsConfiguration:
             return ActionPolicy(
                 enabled=False,
                 allowed_actions=frozenset(),
-                allowed_project_ids=frozenset(),
-                allowed_application_ids=frozenset(),
                 upload_roots=(),
                 max_upload_bytes=DEFAULT_MAX_UPLOAD_BYTES,
                 approval_ttl_seconds=DEFAULT_APPROVAL_TTL_SECONDS,
@@ -132,7 +129,8 @@ class ActionsConfiguration:
     def public_configuration(self) -> dict[str, Any]:
         try:
             policy = self.policy()
-        except ManagedActionError as error:
+            migration_required = self.path.is_file() and _read_settings_file(self.path).get("schema_version") != 2
+        except (ManagedActionError, ConsoleConfigurationError) as error:
             return {
                 "status": "invalid",
                 "enabled": False,
@@ -142,8 +140,9 @@ class ActionsConfiguration:
         return {
             "status": "enabled" if policy.enabled else "disabled",
             **policy.public_info(),
+            "migration_required": migration_required,
             "message": (
-                "Управляемые действия включены только для перечисленных операций и целей"
+                "Операции разрешены только для приложения и проекта из изолированной IDE-сессии"
                 if policy.enabled
                 else "Управляемые действия выключены"
             ),
@@ -154,18 +153,15 @@ class ActionsConfiguration:
         *,
         enabled: bool,
         allowed_actions: Sequence[str],
-        allowed_project_ids: Sequence[str],
-        allowed_application_ids: Sequence[str],
         upload_roots: Sequence[str | Path],
         max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES,
         approval_ttl_seconds: int = DEFAULT_APPROVAL_TTL_SECONDS,
     ) -> dict[str, Any]:
         values = {
-            "schema_version": 1,
+            "schema_version": 2,
+            "target_scope": "current_ide_session",
             "enabled": enabled,
             "allowed_actions": list(allowed_actions),
-            "allowed_project_ids": list(allowed_project_ids),
-            "allowed_application_ids": list(allowed_application_ids),
             "upload_roots": [str(path) for path in upload_roots],
             "max_upload_bytes": max_upload_bytes,
             "approval_ttl_seconds": approval_ttl_seconds,
@@ -220,6 +216,7 @@ class ManagedActionsService:
         audit_log: AuditLog | None = None,
         clock: Callable[[], float] = time.time,
         sleeper: Callable[[float], None] = time.sleep,
+        ide_session: IdeSession | None = None,
     ) -> None:
         self.settings = settings
         self.console = console
@@ -227,23 +224,45 @@ class ManagedActionsService:
         self.audit_log = audit_log or AuditLog(settings.resolved_data_path / "audit" / "managed-actions")
         self.clock = clock
         self.sleeper = sleeper
+        self.ide_session = ide_session
         self._prepared: dict[str, PreparedAction] = {}
         self._used: dict[str, float] = {}
         self._lock = threading.Lock()
 
     def configuration_info(self) -> dict[str, Any]:
-        return self.configuration.public_configuration()
+        result = self.configuration.public_configuration()
+        try:
+            scope = (
+                self.ide_session.public_info()
+                if self.ide_session
+                else {
+                    "status": "missing",
+                    "message": (
+                        "Для записи требуется плагин с изолированным IDE handoff v1. "
+                        "Переподключите или обновите плагин."
+                    ),
+                }
+            )
+        except IdeSessionError as error:
+            scope = {"status": "expired", "message": str(error)}
+        return {**result, "workspace_scope": scope, "can_prepare": result["enabled"] and scope["status"] == "ready"}
 
     def configure(self, **values: Any) -> dict[str, Any]:
         return self.configuration.configure(**values)
 
+    def invalidate_approvals(self) -> None:
+        with self._lock:
+            self._prepared.clear()
+            self._used.clear()
+
     def prepare_upload_project_assembly(
         self,
         *,
-        project_id: str,
+        project_id: str | None = None,
         file_path: str | Path,
         expected_configuration_id: str | None = None,
     ) -> dict[str, Any]:
+        project_id = self._selected_target(project_id, "project_id")
         policy = self._authorize("upload_project_assembly", project_id=project_id)
         selected_project = _uuid(project_id, "project_id")
         project = self._ready_resource(self.console.get_project(selected_project), "project")
@@ -276,10 +295,12 @@ class ManagedActionsService:
     def prepare_update_application(
         self,
         *,
-        application_id: str,
-        project_id: str,
+        application_id: str | None = None,
+        project_id: str | None = None,
         assembly_version: str,
     ) -> dict[str, Any]:
+        application_id = self._selected_target(application_id, "application_id")
+        project_id = self._selected_target(project_id, "project_id")
         policy = self._authorize(
             "update_application",
             application_id=application_id,
@@ -321,12 +342,13 @@ class ManagedActionsService:
     def prepare_application_state_change(
         self,
         *,
-        application_id: str,
+        application_id: str | None = None,
         desired_state: Literal["start", "stop"],
     ) -> dict[str, Any]:
         if desired_state not in {"start", "stop"}:
             raise ManagedActionError("desired_state должен быть start или stop")
         action: ActionName = "start_application" if desired_state == "start" else "stop_application"
+        application_id = self._selected_target(application_id, "application_id")
         policy = self._authorize(action, application_id=application_id)
         selected = _uuid(application_id, "application_id")
         application = self._ready_resource(self.console.get_application(selected), "application")
@@ -513,11 +535,33 @@ class ManagedActionsService:
             raise ManagedActionError("Управляемые действия выключены в локальной конфигурации MCP")
         if action not in policy.allowed_actions:
             raise ManagedActionError(f"Действие {action} отсутствует в allowlist")
-        if project_id is not None and _uuid(project_id, "project_id") not in policy.allowed_project_ids:
-            raise ManagedActionError("project_id отсутствует в allowlist управляемых действий")
-        if application_id is not None and _uuid(application_id, "application_id") not in policy.allowed_application_ids:
-            raise ManagedActionError("application_id отсутствует в allowlist управляемых действий")
+        if self.ide_session is None:
+            raise ManagedActionError("Для записи требуется изолированная IDE-сессия; обновите и переподключите плагин")
+        try:
+            self.ide_session.require_active()
+        except IdeSessionError as error:
+            raise ManagedActionError(str(error)) from error
+        if project_id is not None and _uuid(project_id, "project_id") != self.ide_session.project_id:
+            raise ManagedActionError("project_id не принадлежит текущей IDE-сессии")
+        if application_id is not None and _uuid(application_id, "application_id") != self.ide_session.application_id:
+            raise ManagedActionError("application_id не принадлежит текущей IDE-сессии")
+        current = self.console.get_current_application()
+        if current.get("status") != "ready" or current.get("matches_ide_project") is not True:
+            raise ManagedActionError("Console больше не подтверждает связь приложения с проектом текущей IDE")
+        connection = current.get("connection", {})
+        if (
+            connection.get("project_id") != self.ide_session.project_id
+            or connection.get("application_id") != self.ide_session.application_id
+        ):
+            raise ManagedActionError("Контекст Console не соответствует IDE-сессии")
         return policy
+
+    def _selected_target(self, supplied: str | None, field: str) -> str:
+        if supplied is not None:
+            return _uuid(supplied, field)
+        if self.ide_session is None:
+            raise ManagedActionError("Нет изолированной IDE-сессии для автоматического выбора цели")
+        return getattr(self.ide_session, field)
 
     def _issue(
         self,
@@ -539,6 +583,7 @@ class ManagedActionsService:
             request=request,
             precondition=precondition,
             policy_fingerprint=policy.fingerprint(),
+            session_id=self.ide_session.session_id,
             prepared_at=now,
             expires_at=now + policy.approval_ttl_seconds,
         )
@@ -559,11 +604,12 @@ class ManagedActionsService:
             "approval_token": token,
             "action": action,
             "target": target,
+            "workspace_scope": self.ide_session.public_info(),
             "risks": risks,
             "prepared_at": _timestamp(now),
             "expires_at": _timestamp(prepared.expires_at),
             "one_time": True,
-            "binding": "action, exact target, request parameters, precondition, policy fingerprint",
+            "binding": "IDE session, action, exact target, request parameters, precondition, policy fingerprint",
             "confirmation_required": (
                 "Покажите пользователю action, target, risks и expires_at. Вызывайте execute tool только после "
                 "его явного подтверждения, полученного после этого prepare."
@@ -590,6 +636,9 @@ class ManagedActionsService:
         if prepared.action != expected_action:
             self._audit_rejection(prepared, "wrong_action")
             raise ManagedActionError("Approval token подготовлен для другого действия")
+        if self.ide_session is None or prepared.session_id != self.ide_session.session_id:
+            self._audit_rejection(prepared, "session_changed")
+            raise ManagedActionError("Approval token принадлежит другой IDE-сессии")
         if now >= prepared.expires_at:
             self._audit_rejection(prepared, "expired")
             raise ManagedActionError("Approval token истёк")
@@ -625,14 +674,27 @@ class ManagedActionsService:
         reconciliation: dict[str, Any],
     ) -> dict[str, Any]:
         try:
-            connection = self.console.resolver.resolve()
-            value = self.console.client.mutate(
-                connection,
-                method,
-                path,
-                body=body,
-                content_type=content_type,
-            )
+            if self.ide_session is None:
+                raise ManagedActionError("IDE-сессия отсутствует")
+            with self.ide_session.guard():
+                policy = self._authorize(
+                    prepared.action,
+                    project_id=prepared.request.get("project_id"),
+                    application_id=prepared.request.get("application_id"),
+                )
+                if policy.fingerprint() != prepared.policy_fingerprint:
+                    raise ManagedActionError("Разрешения изменились; выполните prepare заново")
+                self.ide_session.require_active()
+                connection = self.console.resolver.resolve()
+                value = self.console.client.mutate(
+                    connection,
+                    method,
+                    path,
+                    body=body,
+                    content_type=content_type,
+                )
+        except (IdeSessionError, ManagedActionError) as error:
+            return self._execution_failure(prepared, "scope_rejected", str(error), None)
         except ConsoleConfigurationError as error:
             return self._execution_failure(prepared, "configuration_error", str(error), None)
         except ConsoleRequestError as error:
@@ -748,17 +810,17 @@ class ManagedActionsService:
 
 
 def _policy_from_values(values: Mapping[str, Any]) -> ActionPolicy:
-    enabled = _boolean(values.get("enabled", False), "enabled")
+    schema_version = values.get("schema_version", 1)
+    if type(schema_version) is not int or schema_version not in {1, 2}:
+        raise ManagedActionError("Неподдерживаемая версия настроек действий")
+    if schema_version == 2 and values.get("target_scope") != "current_ide_session":
+        raise ManagedActionError("Поддерживается только target_scope=current_ide_session")
+    # Old allowlists must not silently opt existing installations into automatic workspace permissions.
+    enabled = _boolean(values.get("enabled", False), "enabled") and schema_version == 2
     allowed_actions = _string_list(values.get("allowed_actions", []), "allowed_actions", 4)
     unknown = set(allowed_actions) - set(ACTION_NAMES)
     if unknown:
         raise ManagedActionError(f"Неизвестные управляемые действия: {', '.join(sorted(unknown))}")
-    project_values = _string_list(values.get("allowed_project_ids", []), "allowed_project_ids", 100)
-    project_ids = frozenset(_uuid(value, "project_id") for value in project_values)
-    application_ids = frozenset(
-        _uuid(value, "application_id")
-        for value in _string_list(values.get("allowed_application_ids", []), "allowed_application_ids", 100)
-    )
     root_values = _string_list(values.get("upload_roots", []), "upload_roots", 20)
     roots: list[Path] = []
     for value in root_values:
@@ -781,8 +843,6 @@ def _policy_from_values(values: Mapping[str, Any]) -> ActionPolicy:
     policy = ActionPolicy(
         enabled=enabled,
         allowed_actions=frozenset(allowed_actions),  # type: ignore[arg-type]
-        allowed_project_ids=project_ids,
-        allowed_application_ids=application_ids,
         upload_roots=tuple(dict.fromkeys(roots)),
         max_upload_bytes=max_upload,
         approval_ttl_seconds=ttl,
@@ -796,17 +856,8 @@ def _validate_enabled_policy(policy: ActionPolicy) -> None:
         return
     if not policy.allowed_actions:
         raise ManagedActionError("При включении укажите хотя бы одно разрешённое действие")
-    if "upload_project_assembly" in policy.allowed_actions:
-        if not policy.allowed_project_ids:
-            raise ManagedActionError("Для загрузки сборки нужен allowed_project_ids")
-        if not policy.upload_roots:
-            raise ManagedActionError("Для загрузки сборки нужен хотя бы один upload_root")
-    if "update_application" in policy.allowed_actions and (
-        not policy.allowed_application_ids or not policy.allowed_project_ids
-    ):
-        raise ManagedActionError("Для обновления нужны allowed_application_ids и allowed_project_ids")
-    if {"start_application", "stop_application"} & policy.allowed_actions and not policy.allowed_application_ids:
-        raise ManagedActionError("Для запуска или остановки нужен allowed_application_ids")
+    if "upload_project_assembly" in policy.allowed_actions and not policy.upload_roots:
+        raise ManagedActionError("Для загрузки сборки нужен хотя бы один upload_root")
 
 
 def _inspect_archive(path: Path, policy: ActionPolicy, expected_configuration_id: str | None) -> dict[str, Any]:

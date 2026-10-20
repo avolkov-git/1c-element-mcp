@@ -15,6 +15,7 @@ from element_mcp.config import ConfigurationError, ServerSettings
 from element_mcp.console import ConsoleConfigurationError, ConsoleRequestError, ConsoleService
 from element_mcp.corpus import CorpusError
 from element_mcp.documentation import DocumentationService
+from element_mcp.ide_sessions import CONTROL_HEADER, IdeSessionError
 from element_mcp.project import ProjectError, ProjectService
 from element_mcp.runtime import RuntimeConfigurationError, RuntimeDiagnosticsService
 from element_mcp.updates import UpdateError, UpdateService
@@ -297,12 +298,15 @@ def register_ui(
             return JSONResponse({"message": "Настройки действий должны быть JSON-объектом"}, status_code=400)
         list_fields = (
             "allowed_actions",
-            "allowed_project_ids",
-            "allowed_application_ids",
             "upload_roots",
         )
         if not isinstance(payload, dict) or not isinstance(payload.get("enabled"), bool):
             return JSONResponse({"message": "Поле enabled должно быть логическим"}, status_code=400)
+        if "allowed_project_ids" in payload or "allowed_application_ids" in payload:
+            return JSONResponse(
+                {"message": "Ручные UUID-списки заменены IDE-сессией. Обновите страницу настроек."},
+                status_code=400,
+            )
         if any(not isinstance(payload.get(key), list) for key in list_fields):
             return JSONResponse({"message": "Списки разрешений должны быть массивами"}, status_code=400)
         if any(not isinstance(item, str) for key in list_fields for item in payload.get(key, [])):
@@ -312,8 +316,6 @@ def register_ui(
                 actions.configure,
                 enabled=payload["enabled"],
                 allowed_actions=payload["allowed_actions"],
-                allowed_project_ids=payload["allowed_project_ids"],
-                allowed_application_ids=payload["allowed_application_ids"],
                 upload_roots=payload["upload_roots"],
                 max_upload_bytes=payload.get("max_upload_bytes", 512 * 1024 * 1024),
                 approval_ttl_seconds=payload.get("approval_ttl_seconds", 300),
@@ -327,14 +329,36 @@ def register_ui(
     async def configure_element_console(request: Request) -> Response:
         if not mutation_allowed(request):
             return JSONResponse({"message": "Недопустимый локальный запрос"}, status_code=403)
-        if request.method == "DELETE":
-            return JSONResponse(
-                {
-                    "console": console.clear_ide_session(),
-                    "workspace": project.clear_ide_workspace(),
-                },
-                headers={"Cache-Control": "no-store"},
-            )
+        return JSONResponse(
+            {
+                "status": "upgrade_required",
+                "message": "Общий IDE handoff отключён. Обновите плагин до протокола IDE-сессий v1.",
+            },
+            status_code=426,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @server.custom_route("/api/integrations/ide-sessions", methods=["POST"], include_in_schema=False)
+    @server.custom_route(
+        "/api/integrations/ide-sessions/{session_id}",
+        methods=["POST", "DELETE"],
+        include_in_schema=False,
+    )
+    async def manage_ide_session(request: Request) -> Response:
+        if not mutation_allowed(request):
+            return JSONResponse({"message": "Недопустимый локальный запрос"}, status_code=403)
+        session_id = request.path_params.get("session_id")
+        if session_id:
+            controls = request.headers.getlist(CONTROL_HEADER)
+            if len(controls) != 1:
+                return JSONResponse({"message": "Требуется управляющий токен IDE-сессии"}, status_code=401)
+            try:
+                await anyio.to_thread.run_sync(server.ide_sessions.controlled, session_id, controls[0])
+                if request.method == "DELETE":
+                    result = await anyio.to_thread.run_sync(server.ide_sessions.revoke, session_id, controls[0])
+                    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+            except IdeSessionError as error:
+                return JSONResponse({"message": str(error)}, status_code=401, headers={"Cache-Control": "no-store"})
         try:
             content_length = int(request.headers.get("content-length", "0") or 0)
         except ValueError:
@@ -348,8 +372,11 @@ def register_ui(
         if not isinstance(payload, dict):
             return JSONResponse({"message": "Контекст IDE должен быть JSON-объектом"}, status_code=400)
         try:
-            result = await anyio.to_thread.run_sync(console.configure_ide_session, payload)
-        except ConsoleConfigurationError as error:
+            if session_id:
+                result = await anyio.to_thread.run_sync(server.ide_sessions.renew, session_id, controls[0], payload)
+            else:
+                result = await anyio.to_thread.run_sync(server.ide_sessions.create, payload)
+        except (ConsoleConfigurationError, ProjectError, IdeSessionError) as error:
             return JSONResponse({"status": "invalid", "message": str(error)}, status_code=400)
         except ConsoleRequestError as error:
             status_code = error.status_code if error.status_code in {401, 403} else 502
@@ -357,18 +384,8 @@ def register_ui(
                 {"status": "rejected", "http_status": error.status_code, "message": str(error)},
                 status_code=status_code,
             )
-        workspace = None
-        if "workspace_folders" in payload:
-            try:
-                prepared_workspace = await anyio.to_thread.run_sync(project.prepare_ide_workspace, payload)
-                workspace = project.activate_ide_workspace(prepared_workspace)
-            except ProjectError as error:
-                workspace = {
-                    "status": "invalid",
-                    "message": str(error),
-                    "source": "ide_session",
-                }
         return JSONResponse(
-            {**result, **({"workspace": workspace} if workspace is not None else {})},
+            result,
+            status_code=200 if session_id else 201,
             headers={"Cache-Control": "no-store"},
         )

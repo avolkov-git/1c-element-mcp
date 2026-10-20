@@ -11,6 +11,8 @@ import pytest
 from element_mcp.actions import ManagedActionError, ManagedActionsService
 from element_mcp.config import ServerSettings
 from element_mcp.console import ConsoleContextResolver, ConsoleHttpClient, ConsoleRequestError, ConsoleService
+from element_mcp.ide_services import BoundConsoleResolver
+from element_mcp.ide_sessions import IdeSession
 
 SPACE_ID = "11111111-1111-1111-1111-111111111111"
 PROJECT_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -45,6 +47,7 @@ def _application(*, status: str = "Running", task_id: str | None = None) -> dict
         "name": "demo-app",
         "space-id": SPACE_ID,
         "status": status,
+        "project": {"id": PROJECT_ID},
         "source": {
             "type": "image",
             "image-id": PROJECT_ID,
@@ -85,11 +88,29 @@ def _service(tmp_path: Path, requester: Any, clock: Clock | None = None) -> Mana
     )
     console = ConsoleService(settings, resolver=resolver, client=ConsoleHttpClient(requester=requester))
     selected_clock = clock or Clock()
+    session = IdeSession(
+        "test-session",
+        PROJECT_ID,
+        APPLICATION_ID,
+        (str(tmp_path),),
+        selected_clock() + 1000,
+        clock=selected_clock,
+    )
+    console.session_store.set(
+        {
+            "server": "https://element.example/console",
+            "access_token": "test-token",
+            "project_id": PROJECT_ID,
+            "application_id": APPLICATION_ID,
+        }
+    )
+    console.resolver = BoundConsoleResolver(settings, console.resolver.resolve(), session)
     return ManagedActionsService(
         settings,
         console,
         clock=selected_clock,
         sleeper=selected_clock.sleep,
+        ide_session=session,
     )
 
 
@@ -102,8 +123,6 @@ def _configure(
     service.configure(
         enabled=True,
         allowed_actions=list(actions),
-        allowed_project_ids=[PROJECT_ID],
-        allowed_application_ids=[APPLICATION_ID],
         upload_roots=[root],
         max_upload_bytes=1024 * 1024,
         approval_ttl_seconds=ttl,
@@ -115,6 +134,8 @@ def test_upload_uses_exact_target_once_and_never_audits_approval_token(tmp_path:
 
     def requester(method: str, url: str, headers: Any, body: bytes | None, context: Any, timeout: float) -> Any:
         calls.append({"method": method, "path": urllib.parse.urlsplit(url).path, "body": body})
+        if method == "GET" and url.endswith(f"/applications/{APPLICATION_ID}"):
+            return _application()
         if method == "GET" and url.endswith(f"/projects/{PROJECT_ID}"):
             return _project()
         if method == "POST" and url.endswith(f"/projects/{PROJECT_ID}/assemblies"):
@@ -278,6 +299,8 @@ def test_expired_token_and_changed_archive_never_write(tmp_path: Path) -> None:
 
     def requester(method: str, url: str, headers: Any, body: bytes | None, context: Any, timeout: float) -> Any:
         nonlocal writes
+        if method == "GET" and url.endswith(f"/applications/{APPLICATION_ID}"):
+            return _application()
         if method == "GET":
             return _project()
         writes += 1
@@ -348,7 +371,7 @@ def test_policy_is_default_deny_and_requires_exact_uuid(tmp_path: Path) -> None:
         service.prepare_upload_project_assembly(project_id=PROJECT_ID, file_path=tmp_path / "missing.zip")
 
     _configure(service, tmp_path, "upload_project_assembly")
-    with pytest.raises(ManagedActionError, match="allowlist"):
+    with pytest.raises(ManagedActionError, match="текущей IDE-сессии"):
         service.prepare_upload_project_assembly(
             project_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
             file_path=tmp_path / "missing.zip",

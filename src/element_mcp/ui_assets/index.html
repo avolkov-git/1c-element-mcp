@@ -236,7 +236,7 @@
           <div class="settings-heading">
             <div>
               <h2>Управляемые действия</h2>
-              <p>Разрешают агенту изменять только перечисленные проекты и приложения через Console.</p>
+              <p>Разрешают агенту изменять через Console только приложение текущего workspace и связанный проект.</p>
             </div>
             <label class="switch-label" for="actions-enabled">
               <input id="actions-enabled" name="actions-enabled" type="checkbox" role="switch">
@@ -265,34 +265,10 @@
               </label>
             </fieldset>
 
-            <label for="actions-project-ids">Разрешённые UUID проектов</label>
-            <textarea
-              id="actions-project-ids"
-              name="actions-project-ids"
-              rows="3"
-              maxlength="8192"
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="По одному UUID в строке"
-              aria-describedby="actions-project-help actions-feedback actions-error"
-            ></textarea>
-            <p id="actions-project-help" class="settings-help">
-              Нужны для загрузки сборок и обновления приложений.
-            </p>
-
-            <label for="actions-application-ids">Разрешённые UUID приложений</label>
-            <textarea
-              id="actions-application-ids"
-              name="actions-application-ids"
-              rows="3"
-              maxlength="8192"
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="По одному UUID в строке"
-              aria-describedby="actions-application-help actions-feedback actions-error"
-            ></textarea>
-            <p id="actions-application-help" class="settings-help">
-              Нужны для обновления, запуска и остановки приложений.
+            <p class="settings-help">
+              Приложение и проект определяет плагин Element IDE для каждого подключения.
+              Нужен плагин с поддержкой изолированных IDE-сессий. Без такого подключения запись запрещена.
+              При смене workspace подготовленные операции нужно подтвердить заново.
             </p>
 
             <label for="actions-upload-roots">Каталоги со сборками</label>

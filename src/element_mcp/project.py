@@ -172,8 +172,9 @@ def _subsystem_for(path: Path, root: Path, subsystem_directories: set[Path]) -> 
 
 
 class ProjectService:
-    def __init__(self, settings: ServerSettings) -> None:
+    def __init__(self, settings: ServerSettings, *, isolated_ide: bool = False) -> None:
         self.settings = settings
+        self.isolated_ide = isolated_ide
         self.configuration = ConfigurationStore(settings.resolved_config_path)
         self._ide_context: IdeWorkspaceContext | None = None
         self._ide_lock = threading.RLock()
@@ -185,7 +186,7 @@ class ProjectService:
         with self._ide_lock:
             if self._ide_context is not None:
                 return self._ide_context.selected_path
-        return self.configuration.active_project_path()
+        return None if self.isolated_ide else self.configuration.active_project_path()
 
     def project_status(self) -> dict[str, Any]:
         path = self.active_path()
@@ -230,9 +231,7 @@ class ProjectService:
         if supplied.is_file() and supplied.name in ROOT_MANIFESTS:
             supplied = supplied.parent
         root = self._validated_root(supplied.resolve())
-        fixed_path = self.settings.resolved_project_path or (
-            Path(value).expanduser().resolve() if (value := os.environ.get("ELEMENT_PROJECT_PATH")) else None
-        )
+        fixed_path = self._fixed_path()
         if fixed_path is not None and root != fixed_path:
             raise ProjectError(
                 "Путь проекта зафиксирован параметром --project-path или ELEMENT_PROJECT_PATH. "
@@ -250,6 +249,8 @@ class ProjectService:
                 self._ide_context = replace(self._ide_context, selected_path=root)
                 source = "ide_session"
             else:
+                if self.isolated_ide:
+                    raise ProjectError("Изолированный workspace IDE не подключён")
                 self.configuration.connect_project(root, metadata=metadata)
         return {
             "status": "ready",
@@ -304,6 +305,11 @@ class ProjectService:
         with self._ide_lock:
             self._ide_context = None
         return {"status": "cleared", "message": "Временный workspace-контекст IDE отключён"}
+
+    def refresh_ide_git_status(self, value: Any) -> None:
+        with self._ide_lock:
+            if self._ide_context is not None:
+                self._ide_context = replace(self._ide_context, git_status=self._sanitize_ide_git_status(value))
 
     def ide_workspace_context(self) -> dict[str, Any] | None:
         with self._ide_lock:
@@ -580,6 +586,8 @@ class ProjectService:
         }
 
     def _fixed_path(self) -> Path | None:
+        if self.isolated_ide:
+            return None
         if self.settings.resolved_project_path is not None:
             return self.settings.resolved_project_path
         configured = os.environ.get("ELEMENT_PROJECT_PATH")
