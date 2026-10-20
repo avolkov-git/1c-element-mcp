@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+from base64 import b64encode
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -12,7 +13,7 @@ from starlette.testclient import TestClient
 
 from element_mcp.actions import ActionsConfiguration
 from element_mcp.config import ServerSettings
-from element_mcp.console import ConsoleHttpClient
+from element_mcp.console import ConsoleHttpClient, ConsoleRequestError
 from element_mcp.ide_sessions import (
     CONTROL_HEADER,
     SESSION_HEADER,
@@ -44,6 +45,7 @@ def payload(project, application, root):
 def running(tmp_path, element_project_path, monkeypatch):
     settings = ServerSettings(
         config_path=tmp_path / "config.json",
+        console_config_path=tmp_path / "console.json",
         actions_config_path=tmp_path / "actions.json",
         data_path=tmp_path / "data",
         transport="streamable-http",
@@ -101,6 +103,7 @@ def running(tmp_path, element_project_path, monkeypatch):
         a = create(PROJECT_A, APP_A, element_project_path)
         b = create(PROJECT_B, APP_B, root_b)
         yield SimpleNamespace(
+            settings=settings,
             client=client,
             server=server,
             headers=headers,
@@ -250,6 +253,174 @@ def test_bad_registration_never_replaces_other_session(running):
     assert r.client.post("/api/integrations/ide-sessions", json=payload(PROJECT_A, APP_A, r.root_a)).status_code == 403
     assert call(r.client, r.a["mcp_token"], "get_current_application")["application"]["id"] == APP_A
     assert len(r.server.ide_sessions._sessions) == 2
+
+
+def test_registration_and_bound_session_ignore_broken_shared_configuration(running, monkeypatch):
+    r = running
+    r.settings.resolved_console_config_path.write_text("{invalid json", encoding="utf-8")
+    monkeypatch.setenv("ELEMENT_CONSOLE_URL", "https://unrelated.example/console")
+    monkeypatch.setenv("ELEMENT_CONSOLE_ACCESS_TOKEN", "unrelated-secret")
+    calls = []
+
+    def get(self, connection, path):
+        calls.append(path)
+        assert connection.base_url == "https://element.example/console"
+        assert connection.access_token == "synthetic-console-secret"
+        if path == "/api/v2/spaces":
+            return []
+        assert path == f"/api/v2/applications/{APP_A}"
+        return {"id": APP_A, "project": {"id": PROJECT_A}}
+
+    monkeypatch.setattr(ConsoleHttpClient, "get", get)
+    response = r.client.post(
+        "/api/integrations/ide-sessions", headers=r.headers, json=payload(PROJECT_A, APP_A, r.root_a)
+    )
+    assert response.status_code == 201, response.text
+    assert calls == ["/api/v2/spaces", f"/api/v2/applications/{APP_A}"]
+    current = call(r.client, response.json()["mcp_token"], "get_current_application")
+    assert current["matches_ide_project"] is True
+    assert len(r.server.ide_sessions._sessions) == 3
+    assert r.settings.resolved_console_config_path.read_text() == "{invalid json"
+
+
+def test_registration_uses_ide_credentials_through_real_console_client(tmp_path, element_project_path, monkeypatch):
+    settings = ServerSettings(
+        config_path=tmp_path / "config.json",
+        console_config_path=tmp_path / "console.json",
+        ide_settings_path=tmp_path / "missing-ide.json",
+        actions_config_path=tmp_path / "actions.json",
+        data_path=tmp_path / "data",
+        transport="streamable-http",
+        host="127.0.0.1",
+    )
+    settings.resolved_console_config_path.write_text("{invalid json", encoding="utf-8")
+    monkeypatch.setenv("ELEMENT_CONSOLE_URL", "https://unrelated.example/console")
+    monkeypatch.setenv("ELEMENT_CONSOLE_ACCESS_TOKEN", "unrelated-secret")
+    calls = []
+
+    def requester(method, url, headers, body, context, timeout):
+        calls.append(url)
+        assert method == ("POST" if url.endswith("/sys/token") else "GET")
+        assert url.startswith("https://element.example/console/")
+        if url.endswith("/sys/token"):
+            expected = b64encode(b"ide-client:ide-secret").decode("ascii")
+            assert headers["Authorization"] == f"Basic {expected}"
+            assert body == b"grant_type=CLIENT_CREDENTIALS"
+            return {"id_token": "session-console-token"}
+        assert headers["Authorization"] == "Bearer session-console-token"
+        if url.endswith("/api/v2/spaces"):
+            return []
+        assert url.endswith(f"/api/v2/applications/{APP_A}")
+        return {"id": APP_A, "project": {"id": PROJECT_A}}
+
+    monkeypatch.setattr("element_mcp.console._urlopen_json", requester)
+    server = create_server(settings)
+    with TestClient(server.streamable_http_app(), base_url="http://127.0.0.1:9900") as client:
+        page = client.get("/")
+        csrf = re.search(r'name="element-mcp-token" content="([^"]+)"', page.text).group(1)
+        values = payload(PROJECT_A, APP_A, element_project_path)
+        del values["access_token"]
+        values.update(client_id="ide-client", client_secret="ide-secret")
+        response = client.post("/api/integrations/ide-sessions", headers={"X-Element-MCP-Token": csrf}, json=values)
+        assert response.status_code == 201, response.text
+        current = call(client, response.json()["mcp_token"], "get_current_application")
+        assert current["matches_ide_project"] is True
+        assert len(calls) == 4
+        assert sum(url.endswith("/sys/token") for url in calls) == 1
+        for secret in ("ide-secret", "session-console-token", "unrelated-secret"):
+            assert secret not in response.text
+            assert secret not in json.dumps(current)
+    assert settings.resolved_console_config_path.read_text() == "{invalid json"
+
+
+@pytest.mark.parametrize("stage", ["authentication", "application"])
+@pytest.mark.parametrize("http_status", [401, 403, 404, 429, 500, 503, None])
+def test_registration_preserves_console_failure_stage_and_status(running, monkeypatch, caplog, stage, http_status):
+    r = running
+    original = ConsoleHttpClient.get
+
+    def get(self, connection, path):
+        if stage == "authentication" or path == f"/api/v2/applications/{APP_A}":
+            raise ConsoleRequestError(
+                "upstream-body synthetic-console-secret client-secret /private/path",
+                status_code=http_status,
+            )
+        return original(self, connection, path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ConsoleHttpClient, "get", get)
+        response = r.client.post(
+            "/api/integrations/ide-sessions", headers=r.headers, json=payload(PROJECT_A, APP_A, r.root_a)
+        )
+    assert response.status_code == (http_status if http_status in {401, 403} else 502)
+    body = response.json()
+    assert body["status"] == "rejected"
+    assert body["code"] == f"console_{stage}_failed"
+    assert body["http_status"] == http_status
+    assert ("авторизацию" if stage == "authentication" else "приложение") in body["message"]
+    assert response.headers["cache-control"] == "no-store"
+    assert f"code={body['code']}" in caplog.text
+    for secret in ("synthetic-console-secret", "client-secret", "upstream-body", "/private/path"):
+        assert secret not in response.text
+        assert secret not in caplog.text
+    assert len(r.server.ide_sessions._sessions) == 2
+    assert call(r.client, r.a["mcp_token"], "get_current_application")["application"]["id"] == APP_A
+
+
+@pytest.mark.parametrize(
+    ("application", "code", "status"),
+    [
+        ({"id": APP_A}, "application_project_missing", 400),
+        ({"id": APP_A, "project": {"id": "not-a-uuid"}}, "application_project_invalid", 400),
+        ({"id": APP_A, "project": {"id": PROJECT_B}}, "application_project_mismatch", 400),
+        ({"id": APP_A, "source": {"image-id": PROJECT_B}}, "application_project_mismatch", 400),
+        ({"id": APP_B, "project": {"id": PROJECT_A}}, "console_application_failed", 502),
+        (["unexpected-array"], "console_application_failed", 502),
+    ],
+)
+def test_registration_distinguishes_invalid_application_and_project(
+    running, monkeypatch, caplog, application, code, status
+):
+    r = running
+    original = ConsoleHttpClient.get
+
+    def get(self, connection, path):
+        if path == f"/api/v2/applications/{APP_A}":
+            return application
+        return original(self, connection, path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ConsoleHttpClient, "get", get)
+        response = r.client.post(
+            "/api/integrations/ide-sessions", headers=r.headers, json=payload(PROJECT_A, APP_A, r.root_a)
+        )
+    assert response.status_code == status
+    assert response.json()["code"] == code
+    assert response.json()["http_status"] is None
+    assert response.headers["cache-control"] == "no-store"
+    assert f"code={code}" in caplog.text
+    assert len(r.server.ide_sessions._sessions) == 2
+    assert call(r.client, r.a["mcp_token"], "get_current_application")["matches_ide_project"] is True
+
+
+@pytest.mark.parametrize(
+    "project", [{"project": {"id": f" {{{PROJECT_A.upper()}}} "}}, {"source": {"image-id": PROJECT_A}}]
+)
+def test_registration_accepts_official_project_fields_and_uuid_format(running, monkeypatch, project):
+    r = running
+
+    def get(self, connection, path):
+        if path == "/api/v2/spaces":
+            return []
+        assert path == f"/api/v2/applications/{APP_A}"
+        return {"id": APP_A, **project}
+
+    monkeypatch.setattr(ConsoleHttpClient, "get", get)
+    response = r.client.post(
+        "/api/integrations/ide-sessions", headers=r.headers, json=payload(PROJECT_A, APP_A, r.root_a)
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["project_id"] == PROJECT_A
 
 
 def test_changed_console_association_and_revoked_approval_never_write(running):

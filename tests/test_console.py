@@ -16,6 +16,7 @@ from element_mcp.console import (
     ConsoleHttpClient,
     ConsoleRequestError,
     ConsoleService,
+    ConsoleSessionStore,
 )
 
 SPACE_ID = "11111111-1111-1111-1111-111111111111"
@@ -132,6 +133,71 @@ def test_default_console_config_is_next_to_main_config(tmp_path: Path) -> None:
     assert public["configured"] is True
     assert public["credential_kind"] == "access_token"
     assert "short-lived-token" not in json.dumps(public)
+
+
+@pytest.mark.parametrize("shared_source", ["console", "ide", "missing_ide", "workspace"])
+def test_ide_session_does_not_read_shared_configuration(tmp_path, monkeypatch, shared_source):
+    monkeypatch.chdir(tmp_path)
+    console_path = tmp_path / "console.json"
+    ide_path = tmp_path / "ide.json"
+    workspace_path = tmp_path / ".vscode" / "settings.json"
+    workspace_path.parent.mkdir()
+    paths = {"console": console_path, "ide": ide_path, "workspace": workspace_path}
+    if shared_source in paths:
+        paths[shared_source].write_text("{invalid json", encoding="utf-8")
+    settings = ServerSettings(
+        config_path=tmp_path / "config.json",
+        console_config_path=console_path,
+        ide_settings_path=ide_path if shared_source in {"ide", "missing_ide"} else None,
+        transport="stdio",
+    )
+    store = ConsoleSessionStore()
+    store.set(
+        {
+            "server": "https://ide.example/console",
+            "access_token": "ide-token",
+            "project_id": PROJECT_ID,
+            "application_id": APPLICATION_ID,
+        }
+    )
+    resolver = ConsoleContextResolver(
+        settings,
+        environ={
+            "ELEMENT_CONSOLE_URL": "https://unrelated.example/console",
+            "ELEMENT_CONSOLE_ACCESS_TOKEN": "unrelated-token",
+            "ELEMENT_CONSOLE_VERIFY_TLS": "invalid",
+        },
+        session_store=store,
+    )
+
+    def shared_sources_forbidden():
+        pytest.fail("IDE session must not inspect shared configuration")
+
+    monkeypatch.setattr(resolver, "_candidates", shared_sources_forbidden)
+    connection = resolver.resolve()
+    assert connection.source == "ide_session"
+    assert connection.base_url == "https://ide.example/console"
+    assert connection.access_token == "ide-token"
+    assert connection.project_id == PROJECT_ID
+    assert connection.application_id == APPLICATION_ID
+
+
+@pytest.mark.parametrize("session_values", [{}, {"server": "https://ide.example/console"}])
+def test_invalid_ide_session_never_falls_back_to_shared_credentials(tmp_path, session_values):
+    store = ConsoleSessionStore()
+    store.set(session_values)
+    resolver = ConsoleContextResolver(
+        ServerSettings(config_path=tmp_path / "config.json"),
+        environ={
+            "ELEMENT_CONSOLE_URL": "https://standalone.example/console",
+            "ELEMENT_CONSOLE_ACCESS_TOKEN": "standalone-token",
+        },
+        session_store=store,
+    )
+    with pytest.raises(ConsoleConfigurationError, match="ide_session"):
+        resolver.resolve()
+    store.clear()
+    assert resolver.resolve().source == "environment"
 
 
 def test_stdio_discovers_workspace_settings_but_http_does_not(

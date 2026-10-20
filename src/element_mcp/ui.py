@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import logging
 import secrets
 from functools import partial
 from importlib import resources
@@ -15,10 +16,12 @@ from element_mcp.config import ConfigurationError, ServerSettings
 from element_mcp.console import ConsoleConfigurationError, ConsoleRequestError, ConsoleService
 from element_mcp.corpus import CorpusError
 from element_mcp.documentation import DocumentationService
-from element_mcp.ide_sessions import CONTROL_HEADER, IdeSessionError
+from element_mcp.ide_sessions import CONTROL_HEADER, IdeSessionError, IdeSessionRegistrationError
 from element_mcp.project import ProjectError, ProjectService
 from element_mcp.runtime import RuntimeConfigurationError, RuntimeDiagnosticsService
 from element_mcp.updates import UpdateError, UpdateService
+
+logger = logging.getLogger(__name__)
 
 
 def _asset(name: str) -> str:
@@ -376,6 +379,19 @@ def register_ui(
                 result = await anyio.to_thread.run_sync(server.ide_sessions.renew, session_id, controls[0], payload)
             else:
                 result = await anyio.to_thread.run_sync(server.ide_sessions.create, payload)
+        except IdeSessionRegistrationError as error:
+            logger.warning(
+                "IDE-session registration rejected: code=%s; status=%s; console_http_status=%s; %s",
+                error.code,
+                error.status_code,
+                error.console_http_status,
+                error,
+            )
+            return JSONResponse(
+                error.public_info(),
+                status_code=error.status_code,
+                headers={"Cache-Control": "no-store"},
+            )
         except (ConsoleConfigurationError, ProjectError, IdeSessionError) as error:
             return JSONResponse({"status": "invalid", "message": str(error)}, status_code=400)
         except ConsoleRequestError as error:

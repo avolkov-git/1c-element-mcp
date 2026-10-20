@@ -86,6 +86,11 @@ class ConsoleContextResolver:
         self.session_store = session_store
 
     def resolve(self) -> ConsoleConnection:
+        if self.session_store is not None:
+            session_values = self.session_store.get()
+            if session_values is not None:
+                # An IDE handoff is authoritative: do not read or fall back to shared credentials.
+                return _connection_from_values(session_values, source="ide_session")
         problems: list[str] = []
         candidates = self._candidates()
         for source, values in candidates:
@@ -102,10 +107,6 @@ class ConsoleContextResolver:
 
     def _candidates(self) -> list[tuple[str, dict[str, Any]]]:
         candidates: list[tuple[str, dict[str, Any]]] = []
-        if self.session_store:
-            session_values = self.session_store.get()
-            if session_values:
-                candidates.append(("ide_session", session_values))
         environment_values = _environment_values(self.environ)
         if environment_values:
             candidates.append(("environment", environment_values))
@@ -164,7 +165,7 @@ class ConsoleSessionStore:
 
     def get(self) -> dict[str, Any] | None:
         with self._lock:
-            return dict(self._values) if self._values else None
+            return dict(self._values) if self._values is not None else None
 
     def set(self, values: Mapping[str, Any]) -> None:
         with self._lock:

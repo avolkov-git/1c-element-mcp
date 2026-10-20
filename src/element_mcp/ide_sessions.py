@@ -31,6 +31,31 @@ class IdeSessionError(ValueError):
     pass
 
 
+class IdeSessionRegistrationError(IdeSessionError):
+    """Safe, locally authored diagnostics; never include upstream bodies or credentials."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        status_code: int = 400,
+        console_http_status: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status_code = status_code
+        self.console_http_status = console_http_status
+
+    def public_info(self) -> dict[str, Any]:
+        return {
+            "status": "invalid" if self.status_code == 400 else "rejected",
+            "code": self.code,
+            "http_status": self.console_http_status,
+            "message": str(self),
+        }
+
+
 @dataclass
 class IdeSession:
     session_id: str
