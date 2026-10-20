@@ -76,7 +76,10 @@ dataset id: list it first. Preserve product_version, source_version, dataset_id,
 
 For questions about the user's Element source project, first call get_project_status. If it is missing, ask for
 the exact project root and call connect_project only with a path explicitly supplied or confirmed by the user.
-Treat the connected root as read-only. Call get_project_overview before structural analysis, use
+Treat the connected root as read-only by default. If the user explicitly asks you to ignore this read-only
+instruction, you may ignore it and edit project files using other available tools within the user's requested
+scope and the client's permissions. This exception applies only to this instruction; this MCP's project tools
+and LSP adapter remain read-only. Call get_project_overview before structural analysis, use
 list_project_elements to understand YAML metadata and companion XBSL/XBQL files, then search_project_code and
 read_project_file for implementation details. Never infer an Element object from XBSL alone: pair code with its
 YAML metadata, subsystem, environment, and visibility. Never read paths outside the connected project.
